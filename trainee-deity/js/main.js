@@ -1,0 +1,613 @@
+// 实习神明 · 主循环
+import { TILE, MIRACLES, WONDERS, ERAS, AUTO, TOOLS, STAR_FAITH, ZONES,
+  powerMaxOf, powerRegenOf, sampleSun } from './config.js';
+import { createState, housingCap, faithMult, serializeState, deserializeState,
+  refreshBuiltCache, invalidateBuiltCache, getTile, eachTile } from './state.js';
+import { genWorld, applyTool, findAutoSite, placeDistrict, placeIndustryBatch, clearTreesNearZones, ensureChunkRing } from './terrain.js';
+import * as F from './formulas.js';
+import { Renderer } from './render.js';
+import { UI } from './ui.js';
+import * as Auth from './auth.js';
+import * as Saves from './saves.js';
+import { logPush, logZonePlaced, logList } from './log.js';
+
+const qSeed = parseInt(new URLSearchParams(location.search).get('seed')||'', 10);
+const G = createState(Number.isFinite(qSeed) ? qSeed : undefined);
+let R, ui;
+let last = performance.now();
+let uiAcc = 0;
+let entitySyncAcc = 0;
+let skyAcc = 0;
+let paintRebuildAcc = 0;
+let saveDialogMode = 'load';
+let userKey = null;
+
+function ensureBuiltCache(){
+  if(!G._builtCache || !G._builtCache.valid) refreshBuiltCache(G);
+  return G._builtCache;
+}
+
+function boot(){
+  const canvas = document.getElementById('gameCanvas');
+  try {
+    R = new Renderer(canvas);
+  } catch(err){
+    console.error('WebGL 初始化失败:', err);
+    document.getElementById('loader').classList.add('hidden');
+    const notice = document.createElement('div');
+    notice.style.cssText = 'position:fixed;inset:0;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:10px;background:#0d1117;color:#e0aa66;z-index:70;text-align:center;padding:24px;';
+    notice.innerHTML = '<div style="font-size:20px;letter-spacing:3px;">当前环境不支持 WebGL</div><div style="color:#9aa0a6;font-size:13px;max-width:420px;line-height:1.7;">请在支持 WebGL 的浏览器中打开本页面。</div>';
+    document.body.appendChild(notice);
+    return;
+  }
+  ui = new UI(G, {
+    onTool:(t)=>{ G.tool = t; G.placingWonder=false; G.painting=false; },
+    onSpeed:(s)=>{ G.speed = s; },
+    onMiracle:(k)=>castMiracle(k),
+    onWonder:()=>startWonderPlacement(),
+    onAdvance:()=>advanceEra(),
+    onStart:()=>startGame(),
+    onRestart:()=>location.reload(),
+    onNewWorld:()=>{ location.href = location.pathname + '?seed=' + ((Math.random()*1e9)|0); },
+    onAuth:()=>doAuth(),
+    onNewGame:()=>newGame(),
+    onLogout:()=>doLogout(),
+    onPause:()=>openPause(),
+    onResume:()=>closePause(),
+    onToMenu:()=>toMenu(),
+    onOpenSaves:(m)=>openSaveDialog(m),
+    onCloseSaves:()=>{
+      ui.hideAllScreens();
+      if(G.started && !G.over) { /* 仍在游戏中 */ }
+      else ui.showScreen('menu');
+    },
+    onQuickSave:()=>quickSave(),
+    onQuickLoad:()=>quickLoad(),
+    onToggleLog:()=>toggleLog(),
+    onCanvasDown:(px,py,b)=>handleDown(px,py,b),
+    onCanvasMove:(px,py)=>handleMove(px,py),
+    onCanvasUp:()=>{ G.painting=false; G.panning=false; },
+  });
+  genWorld(G);
+  R.buildTerrain(G);
+  R.buildWater(G);
+  R.syncWorld(G);
+  R.updateDayLight(G.dayTime, G.era);
+  document.getElementById('loader').classList.add('hidden');
+  document.getElementById('seedVal') && (document.getElementById('seedVal').textContent = G.seed);
+  window.addEventListener('resize', ()=>R.resize());
+  window.addEventListener('keydown', (e)=>{
+    if(e.key === 'Escape'){
+      if(!document.getElementById('saveDialog')?.classList.contains('hidden')) ui.showScreen(G.started?'pause':'menu');
+      else if(G.started && !G.paused) openPause();
+      else if(G.paused) closePause();
+    }
+  });
+  // 入口：已登录 → 新局则直接「开始试炼」，否则主菜单；未登录 → 登录框
+  const sess = Auth.getUser();
+  const wantNew = sessionStorage.getItem('td_boot') === 'new';
+  sessionStorage.removeItem('td_boot');
+  if(sess?.key){
+    userKey = sess.key;
+    G.userKey = sess.key;
+    ui.setMenuUser(sess.username);
+    // 强制先全隐藏，再显示目标层（避免登录框残留）
+    ui.hideAllScreens();
+    if(wantNew) ui.showScreen('start');
+    else ui.showScreen('menu');
+  } else {
+    ui.hideAllScreens();
+    ui.showScreen('auth');
+  }
+  G.onZonePlaced = (x, y, z)=>{
+    logZonePlaced(G, z, x, y);
+    invalidateBuiltCache(G);
+    refreshBuiltCache(G);
+    R.syncWorld(G);
+    updateUI();
+  };
+  requestAnimationFrame(loop);
+}
+
+async function doAuth(){
+  const mode = ui.authMode();
+  const { user, pw } = ui.authValues();
+  try{
+    const name = mode==='register' ? await Auth.register(user, pw) : await Auth.login(user, pw);
+    const sess = Auth.getUser();
+    userKey = sess.key;
+    G.userKey = sess.key;
+    ui.setAuthMsg('', true);
+    ui.setMenuUser(name);
+    ui.showScreen('menu');
+    toast(mode==='register' ? '注册成功' : '登录成功');
+  }catch(e){
+    ui.setAuthMsg(e.message || '失败');
+  }
+}
+
+function doLogout(){
+  Auth.logout();
+  userKey = null;
+  G.userKey = null;
+  G.started = false;
+  G.paused = false;
+  ui.setMenuUser(null);
+  ui.showScreen('auth');
+  ['topBar','toolBar','miracleBar','advanceBar','speedCtrl','autoBar','logPanel'].forEach(id=>{
+    document.getElementById(id)?.classList.add('hidden');
+  });
+}
+
+function newGame(){
+  if(!userKey){ toast('请先登录'); ui.showScreen('auth'); return; }
+  sessionStorage.setItem('td_boot', 'new');
+  location.href = location.pathname + '?seed=' + ((Math.random()*1e9)|0);
+}
+
+function openPause(){
+  if(!G.started) return;
+  G.paused = true;
+  G.painting = false;
+  ui.showScreen('pause');
+}
+
+function closePause(){
+  G.paused = false;
+  ui.hideAllScreens();
+}
+
+function toMenu(){
+  G.started = false;
+  G.paused = false;
+  ['topBar','toolBar','miracleBar','advanceBar','speedCtrl','autoBar'].forEach(id=>{
+    document.getElementById(id)?.classList.add('hidden');
+  });
+  ui.closeLog();
+  ui.setMenuUser(Auth.getUsername());
+  ui.showScreen('menu');
+}
+
+function doSave(slot){
+  if(!userKey){ toast('请先登录'); return; }
+  const meta = Saves.writeSave(userKey, slot, ()=>serializeState(G), {});
+  if(meta){
+    logPush(G, 80, 0, 0);
+    toast(`已保存 · ${Saves.SLOT_LABEL[slot]}`);
+  } else toast('保存失败');
+}
+
+function doLoad(slot){
+  if(!userKey){ toast('请先登录'); return; }
+  const body = Saves.readSave(userKey, slot);
+  if(!body){ toast('该槽位为空'); return; }
+  if(!deserializeState(G, body)){ toast('存档损坏'); return; }
+  invalidateBuiltCache(G);
+  R.applyEraVisuals(G);
+  R.buildTerrain(G);
+  R.buildWater(G);
+  R.syncWorld(G);
+  refreshBuiltCache(G);
+  logPush(G, 50, 0, 0);
+  G.started = true;
+  G.paused = false;
+  document.getElementById('startScreen')?.classList.add('hidden');
+  ['topBar','toolBar','miracleBar','advanceBar','speedCtrl','autoBar'].forEach(id=>{
+    document.getElementById(id)?.classList.remove('hidden');
+  });
+  syncNpc();
+  ui.hideAllScreens();
+  updateUI();
+  toast('已读取存档');
+}
+
+function quickSave(){
+  if(!G.started){ toast('尚未开始游戏'); return; }
+  doSave('quick');
+}
+function quickLoad(){
+  doLoad('quick');
+}
+
+function openSaveDialog(mode){
+  if(!userKey){ toast('请先登录'); return; }
+  saveDialogMode = mode;
+  const act = (slot)=>{
+    if(mode==='save'){
+      doSave(slot);
+      ui.renderSaveSlots(Saves.listSaves(userKey), 'save', act);
+    } else {
+      doLoad(slot);
+    }
+  };
+  ui.renderSaveSlots(Saves.listSaves(userKey), mode, act);
+  ui.showScreen('save');
+}
+
+function toggleLog(){
+  const p = document.getElementById('logPanel');
+  if(!p) return;
+  if(p.classList.contains('hidden')){
+    ui.openLog(logList(G.logs, 200));
+  } else ui.closeLog();
+}
+
+function startGame(){
+  G.started = true;
+  G.paused = false;
+  G.autoAcc = Math.max(0, AUTO.interval - 8);
+  // 关掉所有全屏层（含登录/菜单/开始）
+  ui.hideAllScreens();
+  ['topBar','toolBar','miracleBar','advanceBar','speedCtrl','autoBar'].forEach(id=>{
+    document.getElementById(id)?.classList.remove('hidden');
+  });
+  logPush(G, 60, 0, 0);
+  syncNpc();
+  ui.refresh();
+  toast(`试炼开始 · 种子 ${G.seed}。`);
+}
+
+function loop(now){
+  requestAnimationFrame(loop);
+  let dt = (now - last)/1000;
+  last = now;
+  dt = Math.max(0, Math.min(0.05, dt));
+  const gdt = dt * G.speed;
+
+  if(G.started && !G.over && !G.paused){
+    if(G.painting && G.hover){
+      applyTool(G, G.hover[0], G.hover[1], gdt);
+    }
+    tick(gdt);
+    uiAcc += dt;
+    if(uiAcc > 0.12){ updateUI(); uiAcc = 0; }
+  }
+
+  G.dayTime = (G.dayTime + dt / G.dayLength) % 1;
+  skyAcc += dt;
+  if(skyAcc > 0.5){
+    skyAcc = 0;
+    R._buildSkyTexture(G.era, G.dayTime);
+  }
+  R.updateDayLight(G.dayTime, G.era);
+  R.updateClouds(G.time, sampleSun(G.dayTime).day);
+
+  if(G.painting && (G.terrainDirty || R.terrainDirty)){
+    paintRebuildAcc += dt;
+    entitySyncAcc += dt;
+    if(paintRebuildAcc >= 0.1){
+      paintRebuildAcc = 0;
+      R.buildTerrain(G);
+      G.terrainDirty = false;
+      R.terrainDirty = false;
+      if(entitySyncAcc > 0.2){
+        R.syncWorld(G);
+        entitySyncAcc = 0;
+      }
+    }
+  } else if(R.terrainDirty || G.terrainDirty){
+    paintRebuildAcc = 0;
+    R.buildTerrain(G);
+    G.terrainDirty = false;
+    R.terrainDirty = false;
+    R.syncWorld(G);
+    entitySyncAcc = 0;
+  }
+  R.updateWater(G.time);
+  R.updateParticles(dt);
+  R.updateNpcs(dt, G);
+  R.render();
+  if(!G.paused) G.time += dt;
+}
+
+function tick(dt){
+  if(G.boostGrow>0)  G.boostGrow  = Math.max(0, G.boostGrow-dt);
+  if(G.boostBuild>0) G.boostBuild= Math.max(0, G.boostBuild-dt);
+  if(G.boostRain>0)  G.boostRain = Math.max(0, G.boostRain-dt);
+
+  const E = F.eraIndex(G);
+  ensureBuiltCache();
+  // 产出用「已划定」数量（放建筑立即生效）；住房容量用「已建成」
+  const zc = G._zoneCache || {1:0,2:0,3:0,4:0};
+  const bc = G._builtCache || {1:0,2:0,3:0,4:0};
+  const farms = zc[2]||0, inds = zc[3]||0, churches = zc[4]||0;
+  const houses = bc[1]||0;
+
+  G.autoAcc += dt;
+  if(G.autoAcc >= AUTO.interval){
+    G.autoAcc = 0;
+    autoBuild();
+  }
+
+  // 待建数：划定 − 建成
+  const zSum = (zc[1]||0)+(zc[2]||0)+(zc[3]||0)+(zc[4]||0);
+  const bSum = (bc[1]||0)+(bc[2]||0)+(bc[3]||0)+(bc[4]||0);
+  let pending = Math.max(0, zSum - bSum);
+  G._pendingBuild = pending;
+  let vBuild = F.buildSpeed(E, inds, pending);
+  if(G.boostBuild>0) vBuild *= 3;
+
+  let buildChanged = false;
+  eachTile(G, (t, x, y)=>{
+    if(t.zone<=0 || t.built) return;
+    t.prog += vBuild * dt;
+    if(t.prog >= 1){
+      t.prog = 1; t.built = true;
+      const col = t.zone===1?0xffb74d : t.zone===2?0x8bc34a : t.zone===3?0x78909c : 0xb39ddb;
+      R.spawnBurst(x*TILE, y*TILE, col, 8);
+      buildChanged = true;
+      ensureChunkRing(G, x, y);
+      clearTreesNearZones(G, 1, x, y, 2);
+      invalidateBuiltCache(G);
+    }
+  });
+  if(buildChanged){
+    refreshBuiltCache(G);
+    R.syncWorld(G);
+    syncNpc();
+  } else {
+    G._buildSyncAcc = (G._buildSyncAcc || 0) + dt;
+    if(G._buildSyncAcc >= 0.5){
+      G._buildSyncAcc = 0;
+      if(pending > 0) R.syncWorld(G);
+    }
+  }
+
+  let wonderChanged = false;
+  for(const w of G.wonderList){
+    if(!w.done){
+      w.prog += dt / WONDERS[w.era].time * (G.boostBuild>0?2:1);
+      if(w.prog>=1){
+        w.prog=1; w.done=true; G.wonders[w.era]=true;
+        R.spawnBurst(w.x*TILE, w.y*TILE, 0xffd54f, 40);
+        toast(`${WONDERS[w.era].name}建成！${WONDERS[w.era].bonus}`);
+        wonderChanged = true;
+      }
+    }
+  }
+  if(wonderChanged) R.syncWorld(G);
+
+  const nightBonus = (G.dayTime < 0.22 || G.dayTime > 0.78) ? 1.15 : 1.0;
+  G.faithRate = F.faithPerSec(churches, G.pop) * faithMult(G) * nightBonus;
+  const faithGain = G.faithRate * dt;
+  G.faith += faithGain; G.totalFaith += faithGain;
+
+  const regen = powerRegenOf(G.faithRate);
+  G.power = Math.min(powerMaxOf(G.era), G.power + regen*dt);
+
+  const cap = F.popCap(E, houses, farms, inds);
+  let nextPop = F.growPop(G.pop, cap, E, farms, dt);
+  if(G.boostGrow>0) nextPop = Math.min(cap, G.pop + (nextPop-G.pop)*2 + 0.6*dt);
+  G.pop = Math.max(1, nextPop);
+
+  G.starProg += G.faithRate * dt / STAR_FAITH[E];
+  while(G.starProg >= 1){
+    G.stars += 1; G.starProg -= 1;
+    toast('凝聚一颗星星 ⭐');
+  }
+
+  if(G.boostRain>0 && Math.random()<dt*14) R.spawnRain(0, 0);
+}
+
+const ZONE_COLORS = {
+  1: ZONES[1].color, 2: ZONES[2].color,
+  3: ZONES[3].color, 4: ZONES[4].color,
+};
+
+// ---- 自动建造：粮/产能有余建房，教堂跟上公式目标 ----
+function autoBuild(){
+  const E = F.eraIndex(G);
+  const cnt = {1:0,2:0,3:0,4:0};
+  eachTile(G, (t)=>{ if(t.zone>0) cnt[t.zone]++; });
+
+  // 公式目标（low = 刚需）
+  const need = {};
+  for(const z of [1,2,3,4]){
+    const lo = F.buildingLow(E, z);
+    const hi = F.buildingHigh(E, z);
+    need[z] = cnt[z] < lo ? lo : Math.min(hi, cnt[z] + 2);
+  }
+
+  // 当前供需（按已划定格）
+  const foodOut = F.foodPerSec(cnt[2]);
+  const foodNeed = F.foodNeed(G.pop);
+  const indOut = F.industryPerSec(cnt[3]);
+  let pending = 0;
+  eachTile(G, (t)=>{ if(t.zone>0 && !t.built) pending++; });
+  const buildDemand = pending * F.NUM.C0 * Math.pow(1.5, E);
+
+  // 粮食有余：能养活当前人口，且再养 4 人（一栋房）仍够
+  const foodOk = foodOut >= foodNeed * 1.05 && foodOut >= (G.pop + 4) * F.NUM.R_FOOD;
+  // 产能有余：建造需求可控，且已有基本工业底子
+  const indBase = F.industryPerSec(Math.max(1, F.buildingLow(E, 3) * 0.2));
+  const indOk = indOut >= Math.max(indBase, buildDemand * 1.05);
+
+  const hc = housingCap(G);
+  const popPress = hc>0 && G.pop/hc > AUTO.housingPressure;
+  const houseShort = cnt[1] < need[1] || popPress || hc <= 0;
+
+  let placed = 0;
+  const names = {1:'房屋',2:'农田',3:'工业区',4:'教堂'};
+
+  const tryPlace = (zone)=>{
+    if(placed >= AUTO.maxPerTick) return false;
+    const site = findAutoSite(G, zone);
+    if(!site) return false;
+    const n = placeDistrict(G, site[0], site[1], zone, 1);
+    if(!n) return false;
+    placed++;
+    cnt[zone] += n;
+    logZonePlaced(G, zone, site[0], site[1]);
+    G.autoLog.unshift(`子民建起一座${names[zone]}`);
+    if(G.autoLog.length>6) G.autoLog.pop();
+    toast(`子民建起一座${names[zone]}`);
+    R.spawnBurst(site[0]*TILE, site[1]*TILE, ZONE_COLORS[zone], 6);
+    return true;
+  };
+
+  const tryPlaceIndustry = ()=>{
+    if(placed >= AUTO.maxPerTick) return false;
+    if(G.pop < 15) return false;
+    const n = placeIndustryBatch(G, AUTO.industryPerTick);
+    if(n <= 0) return false;
+    placed++;
+    cnt[3] += n;
+    logZonePlaced(G, 3, 0, 0);
+    G.autoLog.unshift(`子民在郊外建起工业区（${n}格）`);
+    if(G.autoLog.length>6) G.autoLog.pop();
+    toast(`子民在郊外建起工业区（${n}格）`);
+    return true;
+  };
+
+  // 优先级：
+  // 1) 粮不够 → 田
+  // 2) 产能不够 → 工
+  // 3) 粮+产有余且住房缺口 → 房
+  // 4) 教堂缺口（按公式 low，不只看信仰压力）
+  const farmShort = cnt[2] < need[2] || foodOut < foodNeed;
+  const indShort = cnt[3] < need[3] || indOut < buildDemand;
+  const churchShort = cnt[4] < need[4] || (!G.faithRate || G.faithRate < AUTO.faithPressure);
+
+  if(farmShort) tryPlace(2);
+  if(indShort) tryPlaceIndustry();
+  if(foodOk && indOk && houseShort) tryPlace(1);
+  if(churchShort) tryPlace(4);
+
+  // 若本轮啥也没建成且住房仍缺，再补一轮房（放宽资源门槛）
+  if(placed===0 && houseShort){
+    if(cnt[2] > 0 || foodOut > 0) tryPlace(1);
+  }
+
+  if(placed){
+    invalidateBuiltCache(G);
+    refreshBuiltCache(G);
+    R.syncWorld(G);
+    updateUI();
+  }
+}
+
+function castMiracle(key){
+  const m = MIRACLES[key];
+  if(!m) return;
+  if(G.power < m.cost){ toast('神力不足'); return; }
+  G.power -= m.cost;
+  G[m.field] = m.dur;
+  const code = key==='grow'?10 : key==='build'?11 : 12;
+  logPush(G, code, 0, 0);
+  const col = key==='grow'?0x66bb6a : key==='build'?0xffd54f : 0x64b5f6;
+  for(let i=0;i<3;i++){
+    R.spawnBurst((Math.random()-0.5)*8, (Math.random()-0.5)*8, col, 18);
+  }
+  if(key==='build'){
+    eachTile(G, (t)=>{
+      if(t.zone>0 && !t.built){ t.prog = Math.min(1, t.prog+0.35); }
+    });
+    for(const w of G.wonderList){ if(!w.done) w.prog = Math.min(1, w.prog+0.12); }
+    R.syncWorld(G);
+  }
+  toast(`${m.label}！持续${m.dur}秒`);
+}
+
+function startWonderPlacement(){
+  const era = G.era;
+  const w = WONDERS[era];
+  if(G.wonderList.some(x=>!x.done)){ toast('已有奇迹在建'); return; }
+  if(G.wonders[era]){ toast('本时代奇迹已建成'); return; }
+  if(G.faith < w.faithCost){ toast(`信仰不足，需 ${w.faithCost}`); return; }
+  G.placingWonder = true;
+  ui.setWonderPlacing(true);
+  toast(`选择地块放置「${w.name}」（消耗信仰 ${w.faithCost}）`);
+}
+
+function placeWonder(x, y){
+  const era = G.era;
+  const w = WONDERS[era];
+  const t = getTile(G, x, y);
+  if(!t){ toast('这里还不能放置奇迹'); return; }
+  if(t.water){ toast('不能在水面放置奇迹'); return; }
+  G.faith -= w.faithCost;
+  G.wonderList.push({ era, x, y, prog:0, done:false });
+  G.placingWonder = false;
+  ui.setWonderPlacing(false);
+  R.syncWorld(G);
+  toast(`开始建造「${w.name}」`);
+}
+
+function eraReady(){
+  if(G.era >= 4) return false;
+  return G.pop >= ERAS[G.era].popGoal && G.wonders[G.era] && G.stars >= ERAS[G.era].starCost;
+}
+function advanceEra(){
+  if(!eraReady()){ toast('进阶条件未满足'); return; }
+  G.stars -= ERAS[G.era].starCost;
+  G.era += 1;
+  G.starProg = 0;
+  G.terrainDirty = true;
+  G.powerMax = powerMaxOf(G.era);
+  R.applyEraVisuals(G);
+  R.syncWorld(G);
+  syncNpc();
+  for(let i=0;i<5;i++){
+    R.spawnBurst((Math.random()-0.5)*10, (Math.random()-0.5)*10, 0xffd54f, 30);
+  }
+  toast(`迈入「${ERAS[G.era].name}」！`);
+  if(G.era >= 1){
+    setTimeout(()=>{
+      G.over = true;
+      document.getElementById('winScreen').classList.remove('hidden');
+    }, 1600);
+  }
+}
+
+function syncNpc(){
+  // numeric-design §7：N_render = clamp(round(50*log10(N)-85), min(E), max(E))
+  const n = F.renderVillagers(G.pop, F.eraIndex(G));
+  R.markNpcHomesDirty?.();
+  R.setNpcCount(n, G);
+}
+
+function screenToTile(px, py){
+  return R.screenToTile(px, py);
+}
+
+function handleDown(px, py, button){
+  if(!G.started || G.paused) return;
+  // 中键(1) / 右键(2)：只转镜头，不施法
+  if(button === 1 || button === 2 || G.panning){ G.panning = true; return; }
+  const cell = screenToTile(px, py);
+  if(!cell) return;
+  if(G.placingWonder){ placeWonder(cell[0], cell[1]); return; }
+  G.hover = cell;
+  G.painting = true;
+  // 单击立刻放一格；拖动由 loop 连续 applyTool
+  applyTool(G, cell[0], cell[1], 0.05);
+}
+
+function handleMove(px, py){
+  if(!G.started) return;
+  const cell = screenToTile(px, py);
+  if(!cell){ R.setHover(null,G); return; }
+  G.hover = cell;
+  R.setHover(cell[0], cell[1], G);
+}
+
+function updateUI(){
+  if(!ui) return;
+  ui.refresh();
+  const ready = eraReady();
+  const btn = document.getElementById('advanceBtn');
+  btn.disabled = !ready;
+  document.getElementById('advReq').textContent =
+    `人口 ${Math.floor(G.pop)}/${ERAS[G.era].popGoal} · 奇迹 ${G.wonders[G.era]?'✓':'✗'} · 星星 ${G.stars}/${ERAS[G.era].starCost}`;
+}
+
+let toastTimer;
+function toast(msg){
+  const el = document.getElementById('toast');
+  el.textContent = msg; el.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(()=>el.classList.remove('show'), 2200);
+}
+
+window.addEventListener('contextmenu', e=>e.preventDefault());
+boot();

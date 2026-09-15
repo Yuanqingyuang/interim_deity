@@ -1,0 +1,74 @@
+// 实习神明 · 本地多用户 + 密码
+const USERS_KEY = 'td/users';
+const SESSION_KEY = 'td/session';
+
+function loadUsers(){
+  try{ return JSON.parse(localStorage.getItem(USERS_KEY) || '{}'); }catch{ return {}; }
+}
+function saveUsers(u){ localStorage.setItem(USERS_KEY, JSON.stringify(u)); }
+
+function loadSession(){
+  try{ return JSON.parse(sessionStorage.getItem(SESSION_KEY) || localStorage.getItem(SESSION_KEY) || 'null'); }catch{ return null; }
+}
+function saveSession(s){
+  const j = JSON.stringify(s);
+  sessionStorage.setItem(SESSION_KEY, j);
+  localStorage.setItem(SESSION_KEY, j);
+}
+
+export function getUser(){ return loadSession(); }
+export function getUsername(){ return (loadSession()?.username) || null; }
+
+async function hashPw(password, salt){
+  const data = new TextEncoder().encode(`${salt}|${password}`);
+  if(globalThis.crypto?.subtle){
+    const buf = await crypto.subtle.digest('SHA-256', data);
+    return [...new Uint8Array(buf)].map(b=>b.toString(16).padStart(2,'0')).join('');
+  }
+  // 回退：简易 FNV（无 subtle 时）
+  let h = 2166136261;
+  for(const b of data){ h ^= b; h = Math.imul(h, 16777619); }
+  return (h>>>0).toString(16) + data.length;
+}
+
+function makeSalt(){
+  const a = new Uint8Array(8);
+  (globalThis.crypto?.getRandomValues ? crypto.getRandomValues(a) : a.forEach((_,i)=>a[i]=Math.random()*256));
+  return [...a].map(b=>b.toString(16).padStart(2,'0')).join('');
+}
+
+export async function register(username, password){
+  const name = (username||'').trim();
+  if(name.length < 2 || name.length > 24) throw new Error('昵称需 2–24 字符');
+  if((password||'').length < 4) throw new Error('密码至少 4 位');
+  const users = loadUsers();
+  const key = name.toLowerCase();
+  if(users[key]) throw new Error('该昵称已存在');
+  const salt = makeSalt();
+  const hash = await hashPw(password, salt);
+  users[key] = { username: name, salt, hash, createdAt: Date.now() };
+  saveUsers(users);
+  saveSession({ username: name, key, at: Date.now() });
+  return name;
+}
+
+export async function login(username, password){
+  const name = (username||'').trim();
+  const key = name.toLowerCase();
+  const users = loadUsers();
+  const u = users[key];
+  if(!u) throw new Error('用户不存在');
+  const hash = await hashPw(password||'', u.salt);
+  if(hash !== u.hash) throw new Error('密码错误');
+  saveSession({ username: u.username, key, at: Date.now() });
+  return u.username;
+}
+
+export function logout(){
+  sessionStorage.removeItem(SESSION_KEY);
+  localStorage.removeItem(SESSION_KEY);
+}
+
+export function hasUsers(){
+  return Object.keys(loadUsers()).length > 0;
+}

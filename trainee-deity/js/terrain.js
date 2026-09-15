@@ -1,0 +1,750 @@
+// 实习神明 · 地形系统（无边界区块）
+// 种子确定性：域扭曲 + 大陆度 + 脊状山脉 + 丘陵 + 蜿蜒河谷（适配无限区块采样）
+import { MAXH, MINH, WATER_LEVEL, TOOLS, PALETTES, fbm, valueNoise, hash2, CHUNK } from './config.js';
+import { chunkKey, worldToChunk, getTile, tileLive, eachTile, eachChunk, chunkBounds, makeTile } from './state.js';
+import { LAYOUT } from './formulas.js';
+
+const clamp01 = v => v < 0 ? 0 : v > 1 ? 1 : v;
+const smstep = (a, b, x) => { const t = clamp01((x - a) / (b - a)); return t * t * (3 - 2 * t); };
+const mix = (a, b, t) => a + (b - a) * t;
+
+export const LAND_RATIO = 0.56;
+export const RIDGE_STRENGTH = 0.75;
+export const ELEV_PCT = 0.98;
+// 无限图：用固定海平面阈值（与 cont 场量纲对齐），保证任意种子陆海稳定
+const SEA_LEVEL = 0.42;
+
+/** 脊状多重分形 → 山脉 */
+function ridgedNoise(x, y, oct = 5, seed = 0, lac = 2.0, gain = 0.5){
+  let v = 0, amp = 1, f = 1, n = 0, prev = 1;
+  for(let i = 0; i < oct; i++){
+    let q = valueNoise(x * f, y * f, seed + i * 197);
+    q = 1 - Math.abs(q * 2 - 1);
+    q *= q;
+    q *= prev;
+    prev = Math.max(q, 0.15);
+    v += amp * q; n += amp; amp *= gain; f *= lac;
+  }
+  return v / n;
+}
+
+/** 域扭曲 → 海岸/河流蜿蜒 */
+function warp2(x, y, seed, strength = 6, freq = 0.06){
+  const wx = fbm(x * freq + 13.7, y * freq + 5.1, 4, seed + 911);
+  const wy = fbm(x * freq + 47.3, y * freq + 19.6, 4, seed + 1237);
+  return { x: x + (wx - 0.5) * 2 * strength, y: y + (wy - 0.5) * 2 * strength };
+}
+
+/** 大陆度场（不规则岛屿掩码）；d = 距原点归一化 0..1 */
+function continentField(x, y, seed, d){
+  const base = fbm(x * 0.065, y * 0.065, 4, seed + 7);
+  const b2 = fbm(x * 0.15, y * 0.15, 3, seed + 31);
+  const cont = clamp01((base * 0.8 + b2 * 0.2 - 0.5) * 1.9 + 0.5);
+  const dw = clamp01(d + (fbm(x * 0.09, y * 0.09, 3, seed + 404) - 0.5) * 0.35);
+  return cont * (1 - smstep(0.55, 1.05, dw));
+}
+
+/** 陆地高程 0..1+（平原/丘陵/山地分层） */
+function landElevation(x, y, seed, land){
+  const inland = smstep(0.05, 0.55, land);
+  const ridge = ridgedNoise(x * 0.10, y * 0.10, 6, seed + 77);
+  const hill = fbm(x * 0.20, y * 0.20, 4, seed + 123) - 0.5;
+  return Math.max(0, land * 0.30 + inland * 0.25 + ridge * inland * RIDGE_STRENGTH + hill * 0.10);
+}
+
+/**
+ * 高度场（点采样，无限世界可用）
+ * 海床 / 陆地；原点附近 d 小 → 更多陆地
+ */
+export function heightAt(wx, wy, seed){
+  const p = warp2(wx, wy, seed);
+  const d = Math.hypot(wx, wy) / 90;
+  const cont = continentField(p.x, p.y, seed, d);
+
+  if(cont < SEA_LEVEL){
+    const t = clamp01(cont / Math.max(1e-6, SEA_LEVEL));
+    return mix(MINH, WATER_LEVEL - 0.06, t);
+  }
+
+  const land = clamp01((cont - SEA_LEVEL) / (1 - SEA_LEVEL));
+  let elev = landElevation(p.x, p.y, seed, land);
+  // 局部归一：用固定参考分位，保证有峰又不炸
+  const eNorm = clamp01(elev / 1.15);
+  return mix(WATER_LEVEL, MAXH, Math.pow(eNorm, 1.15));
+}
+
+/**
+ * 河流掩码 0..1
+ * 域扭曲 + 细谷噪声；>0.32 可开河
+ */
+export function riverMask(wx, wy, seed){
+  const p = warp2(wx, wy, seed, 8, 0.05);
+  // 沿山向的细线谷：用两向 ridged 交叉
+  const a = ridgedNoise(p.x * 0.09, p.y * 0.09, 4, seed + 301);
+  const b = fbm(p.x * 0.04, p.y * 0.04, 3, seed + 307);
+  // 高大陆上的河谷更明显
+  const cont = continentField(p.x, p.y, seed, Math.hypot(wx, wy) / 90);
+  const inland = smstep(0.35, 0.75, cont);
+  const line = 1 - Math.abs(a * 2 - 1);
+  let r = Math.pow(clamp01(line), 2.2) * (0.35 + b * 0.65) * inland;
+  // 主河带：域扭曲后的低频河槽
+  const main = 1 - Math.abs(fbm(p.x * 0.03, p.y * 0.03, 3, seed + 41) * 2 - 1);
+  r = Math.max(r, Math.pow(clamp01(main), 3.5) * 0.85 * inland);
+  return clamp01(r);
+}
+
+/** 含河道冲刷的采样高度（旷野与管理区共用） */
+export function sampleHeight(wx, wy, seed){
+  let h = heightAt(wx, wy, seed);
+  const rm = riverMask(wx, wy, seed);
+  if(rm > 0.28 && h > WATER_LEVEL - 0.05){
+    const carve = Math.min(1, (rm - 0.28) / 0.45);
+    const bed = WATER_LEVEL - 0.12 - carve * 0.5;
+    h = h * (1 - carve * 0.85) + bed * carve * 0.85;
+    if(h > WATER_LEVEL - 0.02 && carve > 0.55) h = Math.min(h, WATER_LEVEL - 0.15);
+  }
+  return Math.min(Math.max(h, MINH), MAXH);
+}
+
+/** 地形分类（供着色/逻辑） */
+export function terrainClass(h){
+  if(h <= WATER_LEVEL) return 'water';
+  if(h < 1.15) return 'sand';
+  if(h < 2.6) return 'plain';
+  if(h < 4.6) return 'hill';
+  if(h < 6.5) return 'mountain';
+  return 'peak';
+}
+
+function moistureAt(x, y, seed){
+  return fbm(x * 0.07, y * 0.07, 4, seed + 555);
+}
+
+/** 新区块：热侵蚀一次，坡面更自然 */
+function thermalErodeChunk(tiles, talus = 0.9, k = 0.45, iters = 2){
+  const H = CHUNK, W = CHUNK;
+  for(let it = 0; it < iters; it++){
+    const d = [];
+    for(let y=0;y<H;y++){
+      d.push([]);
+      for(let x=0;x<W;x++) d[y].push(tiles[y][x].h);
+    }
+    for(let y=0;y<H;y++){
+      for(let x=0;x<W;x++){
+        for(const [dx,dy] of [[1,0],[-1,0],[0,1],[0,-1]]){
+          const nx=x+dx, ny=y+dy;
+          if(nx<0||ny<0||nx>=W||ny>=H) continue;
+          const diff = tiles[y][x].h - tiles[ny][nx].h;
+          if(diff > talus){
+            const mv = (diff - talus) * k * 0.5;
+            d[y][x] -= mv; d[ny][nx] += mv;
+          }
+        }
+      }
+    }
+    for(let y=0;y<H;y++)
+      for(let x=0;x<W;x++)
+        tiles[y][x].h = d[y][x];
+  }
+}
+
+function fillTileFromNoise(t, x, y, seed){
+  let h = sampleHeight(x, y, seed);
+
+  // 开局原点：羽化平整，不破坏自然轮廓
+  const dist = Math.hypot(x, y);
+  const w = 1 - smstep(3.2, 5.0, dist);
+  if(w > 0 && h > WATER_LEVEL + 0.05){
+    h = mix(h, WATER_LEVEL + 0.95, w * 0.88);
+  }
+
+  t.h = Math.min(Math.max(h, MINH), MAXH);
+  t.water = t.h <= WATER_LEVEL ? 1 : 0;
+  t.tree = 0;
+  t.zone = 0; t.prog = 0; t.built = false;
+  t.variant = (hash2(x, y, seed + 13) * 3) | 0;
+  // 树：湿度 × 高度带
+  if(!t.water && t.h > 1.2 && t.h < 6.0){
+    const m = moistureAt(x, y, seed);
+    if(m > 0.52 && hash2(x, y, seed + 9) < (m - 0.52) * 1.8) t.tree = 1;
+  }
+  t.live = true;
+}
+
+function makeChunkTiles(){
+  const rows = [];
+  for(let ly=0; ly<CHUNK; ly++){
+    const row=[];
+    for(let lx=0; lx<CHUNK; lx++) row.push(makeTile());
+    rows.push(row);
+  }
+  return rows;
+}
+
+export function ensureChunk(G, cx, cy){
+  const k = chunkKey(cx, cy);
+  if(G.chunks.has(k)) return false;
+  const tiles = makeChunkTiles();
+  const seed = G.seed|0;
+  const x0 = cx*CHUNK, y0 = cy*CHUNK;
+  for(let ly=0; ly<CHUNK; ly++)
+    for(let lx=0; lx<CHUNK; lx++)
+      fillTileFromNoise(tiles[ly][lx], x0+lx, y0+ly, seed);
+  thermalErodeChunk(tiles);
+  // 侵蚀后刷新水面标记与树
+  for(let ly=0; ly<CHUNK; ly++)
+    for(let lx=0; lx<CHUNK; lx++){
+      const t = tiles[ly][lx];
+      t.h = Math.min(Math.max(t.h, MINH), MAXH);
+      t.water = t.h <= WATER_LEVEL ? 1 : 0;
+      if(t.water) t.tree = 0;
+    }
+  G.chunks.set(k, { cx, cy, tiles });
+  G.terrainDirty = true;
+  return true;
+}
+
+/** 有建筑的区块：补一圈 8 邻域 */
+export function ensureChunkRing(G, wx, wy){
+  const {cx,cy} = worldToChunk(wx, wy);
+  let n = 0;
+  for(let dy=-1;dy<=1;dy++)
+    for(let dx=-1;dx<=1;dx++)
+      if(ensureChunk(G, cx+dx, cy+dy)) n++;
+  if(n) G.terrainDirty = true;
+  return n;
+}
+
+export function genWorld(G){
+  // 开局 4×4 块（createState 已建空壳，这里填地形）
+  const seed = G.seed|0;
+  eachChunk(G, (ch)=>{
+    const x0=ch.cx*CHUNK, y0=ch.cy*CHUNK;
+    for(let ly=0; ly<CHUNK; ly++)
+      for(let lx=0; lx<CHUNK; lx++)
+        fillTileFromNoise(ch.tiles[ly][lx], x0+lx, y0+ly, seed);
+  });
+  // 原点清树
+  for(let y=-3;y<=3;y++)
+    for(let x=-3;x<=3;x++){
+      const t = getTile(G,x,y);
+      if(t) t.tree = 0;
+    }
+  G.terrainDirty = true;
+}
+
+// ---- 工具 ----
+export function applyTool(G, hx, hy, dt){
+  const tool = TOOLS[G.tool];
+  if(!tool) return;
+  const consume = tool.cost * dt;
+  if(G.power < consume*0.5) return;
+
+  if(tool.kind === 'zone'){
+    const tx = Math.round(hx), ty = Math.round(hy);
+    if(!tileLive(G, tx, ty)) return;
+    // 手动：放宽间隔，玩家可贴着放
+    if(canPlaceZoneManual(G, tx, ty, tool.zone)){
+      const t = getTile(G, tx, ty);
+      t.zone = tool.zone; t.prog = 0; t.built = false; t.tree = 0;
+      ensureChunkRing(G, tx, ty);
+      clearTreesNearZones(G, 1, tx, ty, 2);
+      G.terrainDirty = true;
+      G.power = Math.max(0, G.power - consume);
+      if(typeof G.onZonePlaced === 'function') G.onZonePlaced(tx, ty, tool.zone);
+    }
+    return;
+  }
+
+  const R = tool.radius;
+  const reach = R + 0.7;
+  const x0 = Math.floor(hx - reach);
+  const x1 = Math.ceil(hx + reach);
+  const y0 = Math.floor(hy - reach);
+  const y1 = Math.ceil(hy + reach);
+
+  const cx = Math.round(hx), cy = Math.round(hy);
+  // 平整目标：笔刷半径内非水格的局部均值（更稳，避免跟着单格抖）
+  let hSum = 0, hN = 0;
+  const pr = Math.max(1, Math.round(R));
+  for(let dy=-pr; dy<=pr; dy++)
+    for(let dx=-pr; dx<=pr; dx++){
+      if(dx*dx + dy*dy > pr*pr) continue;
+      const a = getTile(G, cx+dx, cy+dy);
+      if(!a || a.water) continue;
+      hSum += a.h; hN++;
+    }
+  const flattenTarget = hN > 0
+    ? Math.max(1.15, Math.min(5.0, hSum / hN))
+    : 2.0;
+
+  let used = 0;
+  for(let y=y0;y<=y1;y++){
+    for(let x=x0;x<=x1;x++){
+      const t = getTile(G,x,y);
+      if(!t) continue;
+      const dx = x-hx, dy = y-hy;
+      const d = Math.sqrt(dx*dx + dy*dy);
+      if(d > reach) continue;
+      const f = Math.max(0, 1 - d/reach);
+
+      if(tool.kind === 'terrain'){
+        if(G.tool === 'raise'){
+          if(t.water){ t.water=0; t.h = 1.0; }
+          else { t.h = Math.min(MAXH, t.h + 3.4*dt*f); }
+        } else if(G.tool === 'lower'){
+          t.h = Math.max(MINH, t.h - 3.4*dt*f);
+          if(t.h <= WATER_LEVEL){ t.water=1; t.tree=0; }
+        } else if(G.tool === 'flatten'){
+          // 羽化：中心强、边缘弱；向局部均值靠拢
+          t.water = 0;
+          const pull = Math.min(1, 2.8 * dt * f * f);
+          t.h = t.h + (flattenTarget - t.h) * pull;
+          if(t.h < 1.08) t.h = 1.08;
+          if(t.tree && f > 0.25) t.tree = 0;
+        } else if(G.tool === 'water'){
+          if(!t.water && t.h < 2.8){ t.water=1; t.tree=0; t.h = Math.min(t.h,0.7); }
+        } else if(G.tool === 'tree'){
+          if(!t.water && t.h>0.9 && t.h<6.2 && f>0.3){ t.tree = 1; }
+        }
+      }
+      used = Math.max(used, consume);
+    }
+  }
+  G.power = Math.max(0, G.power - used);
+  G.terrainDirty = true;
+}
+
+export function cornerColor(h, adjWater, hRight, hDown, era=0){
+  const p = PALETTES[Math.max(0, Math.min(4, era|0))] || PALETTES[0];
+  const beachTop = WATER_LEVEL + 0.95;
+  let c;
+  // 水下/近岸用沙色过渡，避免整图发蓝；水面由水 mesh 单独画
+  if(h <= WATER_LEVEL + 0.12){
+    // 河床：偏沙褐，不染成亮蓝
+    const k = Math.max(0, Math.min(1, (WATER_LEVEL + 0.12 - h) / 0.8));
+    const sand = hexRGB(p.sand), deep = hexRGB(0x8a7a5a);
+    c = {
+      r: sand.r*(1-k) + deep.r*k,
+      g: sand.g*(1-k) + deep.g*k,
+      b: sand.b*(1-k) + deep.b*k,
+    };
+  } else if(h < beachTop){
+    c = hexRGB(p.sand);
+  } else if(h > 5.5){
+    c = hexRGB(p.snow);
+  } else if(h > 4.2){
+    c = hexRGB(p.rock);
+  } else if(h > beachTop + 0.8){
+    c = hexRGB(p.grass2);
+  } else {
+    c = hexRGB(p.grass);
+  }
+  const sh = Math.max(0.55, Math.min(1.45, 1 + (h-(hRight||h))*0.10 + (h-(hDown||h))*0.07));
+  return { r:c.r*sh, g:c.g*sh, b:c.b*sh };
+}
+
+function hexRGB(hex){
+  return {
+    r: ((hex>>16)&255)/255,
+    g: ((hex>>8)&255)/255,
+    b: (hex&255)/255,
+  };
+}
+
+export function zoneNeedsGap(zoneType){
+  return zoneType !== 2;
+}
+
+/** 玩家手动放置：只禁水面 / 已占用 / 高度，不强制间隔与工业距离 */
+export function canPlaceZoneManual(G, x, y, zoneType){
+  const t = getTile(G, x, y);
+  if(!t) return false;
+  if(t.water || t.zone>0) return false;
+  if(t.h < 0.95 || t.h > 5.4) return false;
+  return true;
+}
+
+export function canPlaceZoneAt(G, x, y, zoneType){
+  const t = getTile(G, x, y);
+  if(!t) return false;
+  if(t.water || t.zone>0) return false;
+  if(t.h < 0.95 || t.h > 5.4) return false;
+
+  if(zoneType === 2){
+    let neighRes = 0, orthRes = 0;
+    for(let dy=-1;dy<=1;dy++){
+      for(let dx=-1;dx<=1;dx++){
+        if(dx===0 && dy===0) continue;
+        const a = getTile(G, x+dx, y+dy);
+        if(a && a.zone===1){
+          neighRes++;
+          if(dx===0 || dy===0) orthRes++;
+        }
+      }
+    }
+    if(neighRes >= 5 || orthRes >= 3) return false;
+  }
+
+  // 工业：硬约束 D_res ≥ 6（切比雪夫）
+  if(zoneType === 3){
+    let dMin = Infinity;
+    for(let dy=-6;dy<=6;dy++)
+      for(let dx=-6;dx<=6;dx++){
+        const a = getTile(G, x+dx, y+dy);
+        if(a && a.zone===1){
+          const d = Math.max(Math.abs(dx), Math.abs(dy));
+          if(d < dMin) dMin = d;
+        }
+      }
+    if(dMin < LAYOUT.R_ind) return false;
+  }
+
+  // 间隔：仅「农田-农田」可相邻；其余任意组合至少空 1 格
+  for(let dy=-1;dy<=1;dy++){
+    for(let dx=-1;dx<=1;dx++){
+      if(dx===0 && dy===0) continue;
+      const a = getTile(G, x+dx, y+dy);
+      if(!a || a.zone<=0) continue;
+      if(zoneType===2 && a.zone===2) continue; // 田-田
+      return false;
+    }
+  }
+  return true;
+}
+
+function residentialStats(G){
+  let sx=0, sy=0, n=0;
+  eachTile(G, (t,x,y)=>{
+    if(t.zone===1){ sx+=x; sy+=y; n++; }
+  });
+  if(!n) return { cx:0, cy:0, n:0 };
+  return { cx:sx/n, cy:sy/n, n };
+}
+
+function minDistToRes(G, x, y){
+  let best = Infinity;
+  eachTile(G, (t,xx,yy)=>{
+    if(t.zone!==1) return;
+    const d = Math.hypot(xx-x, yy-y);
+    if(d < best) best = d;
+  });
+  return best;
+}
+
+function countResNear(G, x, y, r=2){
+  let n = 0;
+  for(let dy=-r;dy<=r;dy++)
+    for(let dx=-r;dx<=r;dx++){
+      const a = getTile(G, x+dx, y+dy);
+      if(a && a.zone===1) n++;
+    }
+  return n;
+}
+
+function countAdjRes(G, x, y){
+  let n = 0;
+  for(let dy=-1;dy<=1;dy++)
+    for(let dx=-1;dx<=1;dx++){
+      if(dx===0 && dy===0) continue;
+      const a = getTile(G, x+dx, y+dy);
+      if(a && a.zone===1) n++;
+    }
+  return n;
+}
+
+// ---- 工业专用：按 numeric-design §8 生成 ----
+
+function chunkOf(x,y){
+  return { cx: Math.floor(x/LAYOUT.CHUNK), cy: Math.floor(y/LAYOUT.CHUNK) };
+}
+
+function chunkStats(G, cx, cy){
+  const x0 = cx*LAYOUT.CHUNK, y0 = cy*LAYOUT.CHUNK;
+  let total=0, by={1:0,2:0,3:0,4:0};
+  for(let ly=0; ly<LAYOUT.CHUNK; ly++)
+    for(let lx=0; lx<LAYOUT.CHUNK; lx++){
+      const t = getTile(G, x0+lx, y0+ly);
+      if(t && t.zone>0){ total++; by[t.zone]++; }
+    }
+  return {
+    total, by,
+    typeShare(z){ return total===0 ? 0.5 : (by[z]/total); }
+  };
+}
+
+/**
+ * 工业单格打分（numeric-design §8.3 / §8.4）
+ * 硬约束：D_res ≥ R_ind、间隔 ≥1、区块未满、非水面、坡度可接受
+ */
+function scoreIndustrialCell(G, x, y, resList, indList, otherList){
+  const t = getTile(G, x, y);
+  if(!t || t.water || t.zone>0) return -1e9;
+  if(t.h < 1.0 || t.h > 5.2) return -1e9;
+
+  for(let dy=-1;dy<=1;dy++)
+    for(let dx=-1;dx<=1;dx++){
+      if(dx===0 && dy===0) continue;
+      const a = getTile(G, x+dx, y+dy);
+      if(a && a.zone>0) return -1e9;
+    }
+
+  let dR = Infinity;
+  if(resList.length){
+    for(const r of resList){
+      const d = Math.max(Math.abs(x-r.x), Math.abs(y-r.y));
+      if(d < dR) dR = d;
+    }
+  } else {
+    dR = 99;
+  }
+  const R = LAYOUT.R_ind;
+  if(dR < R) return -1e9;
+
+  const {cx,cy} = chunkOf(x,y);
+  const st = chunkStats(G, cx, cy);
+  if(st.total >= LAYOUT.BlockCap) return -1e9;
+
+  let dSame = Infinity;
+  for(const p of indList){
+    const d = Math.max(Math.abs(x-p.x), Math.abs(y-p.y));
+    if(d < dSame) dSame = d;
+  }
+  let dOther = Infinity;
+  for(const p of otherList){
+    const d = Math.max(Math.abs(x-p.x), Math.abs(y-p.y));
+    if(d < dOther) dOther = d;
+  }
+  if(dSame===Infinity) dSame = 8;
+  if(dOther===Infinity) dOther = LAYOUT.D_max;
+
+  let flat=0, n=0;
+  for(let dy=-1;dy<=1;dy++)
+    for(let dx=-1;dx<=1;dx++){
+      const a=getTile(G,x+dx,y+dy);
+      if(!a) continue;
+      flat += a.h; n++;
+    }
+  flat = n ? Math.abs(t.h - flat/n) : 0;
+  if(flat > 0.9) return -1e9;
+
+  const A_same = 1 / (1 + dSame);
+  const A_other = Math.min(1, dOther / LAYOUT.D_max);
+  const A_anchor = Math.min(1, (dR - R) / R);
+  const occ = st.total / LAYOUT.BlockCap;
+  const A_chunk = 2.0 * st.typeShare(3) - 1.0 * occ;
+  const overFar = Math.max(0, dR - (R + LAYOUT.D_max));
+  const farPen = 4 * Math.pow(Math.max(0, (dOther - LAYOUT.D_max) / LAYOUT.D_max), 2);
+
+  let sameNear = 0;
+  for(const p of indList){
+    const d = Math.max(Math.abs(x-p.x), Math.abs(y-p.y));
+    if(d <= 2) sameNear++;
+  }
+  const S = Math.min(1, sameNear / 4) * 0.7 + 0.3;
+
+  return LAYOUT.w1 * S
+    + LAYOUT.w2 * A_same
+    + LAYOUT.w3 * A_other
+    + LAYOUT.w4 * A_anchor
+    + LAYOUT.w5 * A_chunk
+    - flat * 1.2
+    - overFar * 1.0
+    - farPen
+    + hash2(x,y,G.seed+7)*0.12;
+}
+
+function collectZoneXY(G, zone){
+  const list = [];
+  eachTile(G, (t,x,y)=>{
+    if(t.zone===zone) list.push({x,y});
+  });
+  return list;
+}
+
+export function placeIndustryBatch(G, maxTiles=2){
+  maxTiles = Math.max(1, Math.min(2, maxTiles|0));
+  const resList = collectZoneXY(G, 1);
+  if(!resList.length) return 0;
+  const indList = collectZoneXY(G, 3);
+  const otherList = [];
+  eachTile(G, (t,x,y)=>{
+    if(t.zone>0 && t.zone!==3) otherList.push({x,y});
+  });
+
+  // 居住质心 + 局部环带搜索，避免全图 O(n²)
+  let sx=0, sy=0;
+  for(const r of resList){ sx+=r.x; sy+=r.y; }
+  sx = Math.round(sx/resList.length);
+  sy = Math.round(sy/resList.length);
+
+  const Rmin = LAYOUT.R_ind;
+  const Rmax = Rmin + LAYOUT.D_max;
+  const shapes = maxTiles >= 2 ? [[1,0],[0,1]] : [[0,0]];
+
+  let best = null, bestScore = -1e9;
+  const samples = 60;
+  for(let i=0;i<samples;i++){
+    const ang = Math.random()*Math.PI*2;
+    const rad = Rmin + Math.random()*(Rmax-Rmin);
+    const x = Math.round(sx + Math.cos(ang)*rad);
+    const y = Math.round(sy + Math.sin(ang)*rad);
+    for(const [dx,dy] of shapes){
+      const s0 = scoreIndustrialCell(G, x, y, resList, indList, otherList);
+      if(s0 < -1e8) continue;
+      let s = s0;
+      if(maxTiles >= 2){
+        const s1 = scoreIndustrialCell(G, x+dx, y+dy, resList, indList, otherList);
+        if(s1 < -1e8) continue;
+        s += s1;
+      }
+      if(s > bestScore){ bestScore = s; best = {x,y,dx,dy}; }
+    }
+  }
+  if(!best) return 0;
+
+  let placed = 0;
+  const put = (x,y)=>{
+    if(placed >= maxTiles) return false;
+    const t = getTile(G,x,y);
+    if(!t || t.zone>0 || t.water) return false;
+    if(scoreIndustrialCell(G, x, y, resList, indList, otherList) < -1e8) return false;
+    t.zone = 3; t.prog = 0; t.built = false; t.tree = 0;
+    indList.push({x,y});
+    placed++;
+    return true;
+  };
+
+  put(best.x, best.y);
+  if(maxTiles >= 2) put(best.x+best.dx, best.y+best.dy);
+  if(placed < maxTiles){
+    for(const [ox,oy] of [[2,0],[-2,0],[0,2],[0,-2],[1,1],[-1,-1],[1,-1],[-1,1]]){
+      if(placed>=maxTiles) break;
+      put(best.x+ox, best.y+oy);
+    }
+  }
+
+  if(placed){
+    G.terrainDirty = true;
+    ensureChunkRing(G, best.x, best.y);
+  }
+  return placed;
+}
+
+export function findAutoSite(G, zoneType){
+  const seed = G.seed|0;
+  const res = residentialStats(G);
+  const sx = res.cx, sy = res.cy;
+  const b = chunkBounds(G);
+
+  // 随机采样代替全图扫描，避免地图变大后卡死
+  const R = zoneType===3 ? 18 : 14;
+  const tries = 80;
+  let best=null, bestScore=-1e9;
+
+  for(let i=0;i<tries;i++){
+    const x = Math.round(sx + (Math.random()*2-1)*R);
+    const y = Math.round(sy + (Math.random()*2-1)*R);
+    if(x < b.minX || x > b.maxX || y < b.minY || y > b.maxY) continue;
+    const t = getTile(G,x,y);
+    if(!t || t.water || t.zone>0 || t.tree) continue;
+    if(t.h < 1.0 || t.h > 5.2) continue;
+    if(!canPlaceZoneAt(G, x, y, zoneType)) continue;
+
+    let adj=0, adjWater=0, flat=0, n=0;
+    for(let dy=-1;dy<=1;dy++)
+      for(let dx=-1;dx<=1;dx++){
+        const a=getTile(G, x+dx, y+dy);
+        if(!a) continue;
+        if(a.zone>0) adj++;
+        if(a.water) adjWater++;
+        flat += a.h; n++;
+      }
+    if(n>0) flat = Math.abs(t.h - flat/n);
+    if(flat > 0.85) continue;
+
+    const dist = Math.hypot(x-sx, y-sy);
+    let score = 1.2 + adj*2 - dist*0.28 - flat*2.0;
+
+    if(zoneType===1){
+      score += hash2(x,y,seed+4)*0.3;
+      if(dist > 16) score -= 1.5;
+    } else if(zoneType===2){
+      const adjRes = countAdjRes(G, x, y);
+      const nearRes = countResNear(G, x, y, 2);
+      if(nearRes < 1) score -= 6;
+      score += adjRes * 5;
+      score += adjWater*1.5 + hash2(x,y,seed+2)*0.3;
+    } else if(zoneType===3){
+      const dRes = Math.max(Math.abs(x-sx), Math.abs(y-sy));
+      if(dRes < LAYOUT.R_ind) continue;
+      score += dRes * 0.5;
+      score += hash2(x,y,seed+7)*0.4;
+    } else if(zoneType===4){
+      const nearRes = countResNear(G, x, y, 2);
+      if(nearRes < 2) score -= 8;
+      score += nearRes * 1.8;
+      score += (t.h-2.2)*0.4 - dist*0.1;
+    }
+
+    if(score > bestScore){ bestScore=score; best=[x,y]; }
+  }
+  return bestScore > 0.2 ? best : null;
+}
+
+export function placeDistrict(G, cx, cy, zoneType, maxTiles=1){
+  // 强制单格：所有自动生成建筑一个一个来
+  maxTiles = 1;
+  let placed = 0;
+  const tryOne = (x,y)=>{
+    if(placed>=maxTiles) return;
+    if(!canPlaceZoneAt(G, x, y, zoneType)) return;
+    const t = getTile(G, x, y);
+    t.zone = zoneType; t.prog = 0; t.built = false; t.tree = 0;
+    placed++;
+  };
+
+  tryOne(cx, cy);
+
+  if(placed){
+    G.terrainDirty = true;
+    ensureChunkRing(G, cx, cy);
+  }
+  clearTreesNearZones(G);
+  return placed;
+}
+
+export function clearTreesNearZones(G, radius=1, cx=null, cy=null, span=null){
+  if(cx==null){
+    eachTile(G, (t,x,y)=>{
+      if(!t.tree) return;
+      let near = false;
+      for(let dy=-radius; dy<=radius && !near; dy++)
+        for(let dx=-radius; dx<=radius; dx++){
+          const a = getTile(G, x+dx, y+dy);
+          if(a && a.zone>0){ near = true; break; }
+        }
+      if(near){ t.tree = 0; G.terrainDirty = true; }
+    });
+    return;
+  }
+  const s = span==null ? 2 : span;
+  const x0 = cx - s, x1 = cx + s, y0 = cy - s, y1 = cy + s;
+  for(let y=y0;y<=y1;y++)
+    for(let x=x0;x<=x1;x++){
+      const t = getTile(G,x,y);
+      if(!t || !t.tree) continue;
+      let near = false;
+      for(let dy=-radius; dy<=radius && !near; dy++)
+        for(let dx=-radius; dx<=radius; dx++){
+          const a = getTile(G, x+dx, y+dy);
+          if(a && a.zone>0){ near = true; break; }
+        }
+      if(near){ t.tree = 0; G.terrainDirty = true; }
+    }
+}
+
+export function cornerHeightAt(G, x, y){
+  const t = getTile(G,x,y);
+  return t ? t.h : 0;
+}

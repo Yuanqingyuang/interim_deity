@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>实习神明 · Trainee Deity</title>
+  <link rel="stylesheet" href="styles.css" />
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://unpkg.com/three@0.161.0/build/three.module.js",
+      "three/addons/": "https://unpkg.com/three@0.161.0/examples/jsm/"
+    }
+  }
+  </script>
+</head>
+<body>
+  <!-- 登录 -->
+  <div id="authScreen" class="overlay">
+    <div class="start-card auth-card">
+      <h1 class="title">实习神明</h1>
+      <p class="subtitle">本地账号 · 存档与日志</p>
+      <div class="auth-tabs">
+        <button type="button" id="tabLogin" class="tab active">登录</button>
+        <button type="button" id="tabReg" class="tab">注册</button>
+      </div>
+      <label class="field">昵称
+        <input id="authUser" type="text" maxlength="24" placeholder="2–24 字符" autocomplete="username" />
+      </label>
+      <label class="field">密码
+        <input id="authPw" type="password" maxlength="64" placeholder="至少 4 位" autocomplete="current-password" />
+      </label>
+      <button id="authBtn" class="btn-primary">登 录</button>
+      <p id="authMsg" class="auth-msg"></p>
+      <p class="hint">数据仅保存在本机浏览器，不上传服务器。</p>
+    </div>
+  </div>
+
+  <!-- 主菜单 -->
+  <div id="menuScreen" class="overlay hidden">
+    <div class="start-card">
+      <h1 class="title">实习神明</h1>
+      <p class="subtitle" id="menuUser">未登录</p>
+      <button id="newGameBtn" class="btn-primary">新 游 戏</button>
+      <button id="loadMenuBtn" class="btn-secondary">读 取 存 档</button>
+      <button id="logoutBtn" class="btn-secondary">退出登录</button>
+      <p class="hint">左键：施加工具 · 右键拖动：旋转视角 · 中键拖动：平移 · 滚轮：缩放<br/>地图由随机种子生成，可用 URL <code>?seed=123</code> 分享同一世界</p>
+    </div>
+  </div>
+
+  <!-- 存档对话框 -->
+  <div id="saveDialog" class="overlay hidden">
+    <div class="start-card save-card">
+      <h1 class="title" id="saveDialogTitle">存档</h1>
+      <div id="saveSlotList" class="slot-list"></div>
+      <div class="dlg-actions">
+        <button id="saveDialogClose" class="btn-secondary">关 闭</button>
+      </div>
+      <p class="hint" id="saveDialogHint"></p>
+    </div>
+  </div>
+
+  <!-- 暂停菜单 -->
+  <div id="pauseMenu" class="overlay hidden">
+    <div class="start-card">
+      <h1 class="title">暂停</h1>
+      <button id="resumeBtn" class="btn-primary">继 续</button>
+      <button id="pauseSaveBtn" class="btn-secondary">保 存</button>
+      <button id="pauseLoadBtn" class="btn-secondary">读 取 存 档</button>
+      <button id="pauseMenuBtn" class="btn-secondary">回到主菜单</button>
+    </div>
+  </div>
+
+  <!-- 日志面板 -->
+  <div id="logPanel" class="log-panel hidden">
+    <div class="log-head">
+      <strong>子民日志</strong>
+      <button id="logClose" class="btn-mini">关闭</button>
+    </div>
+    <div id="logList" class="log-list"></div>
+  </div>
+
+  <div id="startScreen" class="overlay hidden">
+    <div class="start-card">
+      <h1 class="title">实习神明</h1>
+      <p class="subtitle">蛮荒时代 · 毕业试炼</p>
+      <p class="desc">从无边大地开始：塑造地形、日照流转，子民会按需求自动建造。引导文明从茹毛饮血走向星辰大海。</p>
+      <button id="startBtn" class="btn-primary">开 始 试 炼</button>
+      <p class="hint">左键：施加工具 · 右键拖动：旋转视角 · 中键拖动：平移 · 滚轮：缩放<br/>地图由随机种子生成，可用 URL <code>?seed=123</code> 分享同一世界</p>
+    </div>
+  </div>
+
+  <div id="winScreen" class="overlay hidden">
+    <div class="start-card">
+      <h1 class="title">时代进阶！</h1>
+      <p class="subtitle">文明迈入 · 城邦时代</p>
+      <p class="desc">炊烟袅袅，青铜光辉。垂直切片完成 —— 完整版将延续至封建、工业、星际时代。</p>
+      <button id="restartBtn" class="btn-primary">再 来 一 局</button>
+      <button id="newWorldBtn" class="btn-secondary">换个新世界</button>
+    </div>
+  </div>
+
+  <canvas id="gameCanvas"></canvas>
+
+  <!-- 顶部资源栏 -->
+  <div id="topBar" class="topbar hidden">
+    <div class="res">
+      <span class="ico">⚡</span><span id="powerVal">100</span><span class="cap">/100</span>
+      <span class="rate" id="powerRate">+2.5/s</span>
+    </div>
+    <div class="res">
+      <span class="ico">🙏</span><span id="faithVal">0</span>
+      <span class="rate" id="faithRate">+0.0/s</span>
+    </div>
+    <div class="res">
+      <span class="ico">👥</span><span id="popVal">20</span>
+    </div>
+    <div class="res" title="粮食 产出/秒 / 需求/秒">
+      <span class="ico">🌾</span>
+      <span id="foodOut">0/s</span>
+      <span class="need" id="foodNeed">需 0/s</span>
+    </div>
+    <div class="res" title="工业产能 产出/秒 / 需求/秒">
+      <span class="ico">🏭</span>
+      <span id="indOut">0/s</span>
+      <span class="need" id="indNeed">需 0/s</span>
+    </div>
+    <div class="res">
+      <span class="ico">⭐</span><span id="starVal">0</span>
+      <span class="prog" id="starProg">0%</span>
+    </div>
+    <div class="res day">
+      <span id="dayVal">☀ 白昼</span>
+    </div>
+    <div class="spacer"></div>
+    <button id="logBtn" class="btn-save" title="子民日志">📜 日志</button>
+    <button id="quickSaveBtn" class="btn-save" title="快速保存">⚡ 存</button>
+    <button id="quickLoadBtn" class="btn-save" title="快速读取">⚡ 读</button>
+    <button id="pauseBtn" class="btn-save" title="暂停菜单">⏸ 菜单</button>
+    <div class="era-badge" id="eraBadge">
+      <span class="era-roman">I</span>
+      <span class="era-name">蛮荒时代</span>
+    </div>
+  </div>
+
+  <div id="speedCtrl" class="speed-ctrl hidden">
+    <button class="spd" data-spd="1">×1</button>
+    <button class="spd active" data-spd="2">⏩ ×2</button>
+    <button class="spd" data-spd="4">×4</button>
+  </div>
+
+  <!-- 左侧工具栏 -->
+  <div id="toolBar" class="toolbar hidden">
+    <div class="tool-group" data-group="地形">
+      <button class="tool active" data-tool="raise"><span class="t-ico">⛰️</span>抬升<span class="cost">⚡6/s</span></button>
+      <button class="tool" data-tool="lower"><span class="t-ico">🕳️</span>下沉<span class="cost">⚡6/s</span></button>
+      <button class="tool" data-tool="flatten"><span class="t-ico">⬛</span>平整<span class="cost">⚡8/s</span></button>
+      <button class="tool" data-tool="water"><span class="t-ico">🌊</span>引水<span class="cost">⚡8/s</span></button>
+      <button class="tool" data-tool="tree"><span class="t-ico">🌳</span>绿化<span class="cost">⚡5/s</span></button>
+    </div>
+    <div class="tool-group" data-group="区域">
+      <button class="tool" data-tool="z_res"><span class="t-ico">🏘️</span>居住<span class="cost">⚡4/s</span></button>
+      <button class="tool" data-tool="z_agr"><span class="t-ico">🌾</span>农田<span class="cost">⚡4/s</span></button>
+      <button class="tool" data-tool="z_ind"><span class="t-ico">⛏️</span>工业<span class="cost">⚡4/s</span></button>
+      <button class="tool" data-tool="z_fai"><span class="t-ico">🛕</span>信仰<span class="cost">⚡4/s</span></button>
+    </div>
+  </div>
+
+  <!-- 右下神迹与奇迹 -->
+  <div id="miracleBar" class="miracle-bar hidden">
+    <div class="mb-group" data-group="神迹">
+      <button class="mir" data-mir="grow"><span class="m-ico">🌱</span>丰收祝福<span class="m-cost">⚡30</span></button>
+      <button class="mir" data-mir="build"><span class="m-ico">🏗️</span>加速建造<span class="m-cost">⚡40</span></button>
+      <button class="mir" data-mir="rain"><span class="m-ico">🌧️</span>天降甘霖<span class="m-cost">⚡25</span></button>
+    </div>
+    <div class="mb-group" data-group="奇迹">
+      <button class="mir wonder-btn" id="wonderBtn"><span class="m-ico">💫</span>建巨石阵<span class="m-cost">🙏100</span></button>
+    </div>
+  </div>
+
+  <!-- 自动建造日志 -->
+  <div id="autoBar" class="auto-bar hidden">
+    <span class="auto-label">子民</span>
+    <span id="autoLog">正在观察大地…</span>
+  </div>
+
+  <div id="advanceBar" class="advance-bar hidden">
+    <button id="advanceBtn" class="btn-advance" disabled>时代进阶 · 城邦时代</button>
+    <div class="adv-req" id="advReq">人口 0/200 · 奇迹 ✗ · 星星 0/3</div>
+  </div>
+
+  <div id="toast" class="toast"></div>
+  <div id="loader" class="loader">正在凝聚神力…</div>
+
+  <script type="module" src="js/main.js"></script>
+</body>
+</html>
