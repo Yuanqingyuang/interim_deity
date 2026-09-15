@@ -168,20 +168,39 @@ function toMenu(){
   ui.showScreen('menu');
 }
 
+let _saving = false;
 function doSave(slot){
   if(!userKey){ toast('请先登录'); return; }
-  const meta = Saves.writeSave(userKey, slot, ()=>serializeState(G), {});
-  if(meta){
-    logPush(G, 80, 0, 0);
-    toast(`已保存 · ${Saves.SLOT_LABEL[slot]}`);
-  } else toast('保存失败');
+  if(_saving){ toast('正在保存，请稍候'); return; }
+  _saving = true;
+  toast('保存中…');
+  // 先让「保存中…」画出一帧，再跑同步 stringify/setItem，避免体感卡死
+  requestAnimationFrame(()=>{
+    try{
+      const meta = Saves.writeSave(userKey, slot, ()=>serializeState(G), {});
+      if(meta){
+        logPush(G, 80, 0, 0);
+        const s = meta._stats;
+        toast(s
+          ? `已保存 · ${s.totalMs}ms · ${s.kb}KB`
+          : `已保存 · ${Saves.SLOT_LABEL[slot]}`);
+      } else toast('保存失败');
+    }catch(e){
+      console.error('[save] doSave failed', e);
+      toast('保存失败');
+    }finally{
+      _saving = false;
+    }
+  });
 }
 
 function doLoad(slot){
   if(!userKey){ toast('请先登录'); return; }
+  const t0 = performance.now();
   const body = Saves.readSave(userKey, slot);
   if(!body){ toast('该槽位为空'); return; }
   if(!deserializeState(G, body)){ toast('存档损坏'); return; }
+  const tLoad = performance.now();
   invalidateBuiltCache(G);
   R.applyEraVisuals(G);
   R.buildTerrain(G);
@@ -198,6 +217,7 @@ function doLoad(slot){
   syncNpc();
   ui.hideAllScreens();
   updateUI();
+  console.info('[load]', slot, { ms: +(tLoad - t0).toFixed(1), chunks: G.chunks.size });
   toast('已读取存档');
 }
 

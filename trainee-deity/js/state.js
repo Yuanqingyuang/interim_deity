@@ -143,6 +143,11 @@ export function faithMult(G){
 }
 
 export const SAVE_KEY = 'trainee-deity-save-v3';
+// 日志写入上限：控制 stringify/setItem 体积（R1 存档卡死）
+export const SAVE_LOG_CAP = 400;
+
+const r2 = (v)=> Math.round(+v * 100) / 100;
+const r3 = (v)=> Math.round(+v * 1000) / 1000;
 
 export function serializeState(G){
   const chunks = [];
@@ -150,21 +155,23 @@ export function serializeState(G){
     chunks.push({
       cx: ch.cx, cy: ch.cy,
       tiles: ch.tiles.map(row => row.map(t => [
-        +t.h.toFixed(3), t.water|0, t.tree|0, t.zone|0, +t.prog.toFixed(3), t.built?1:0, t.variant|0
+        r3(t.h), t.water|0, t.tree|0, t.zone|0, r3(t.prog), t.built?1:0, t.variant|0
       ]))
     });
   }
+  const logs = logEncode(G.logs);
+  const logSlice = logs.length > SAVE_LOG_CAP ? logs.slice(-SAVE_LOG_CAP) : logs;
   return {
     v: 3,
-    seed: G.seed, era: G.era, speed: G.speed, over: G.over,
-    power: G.power, faith: G.faith, totalFaith: G.totalFaith,
-    pop: G.pop, stars: G.stars, starProg: G.starProg,
-    dayTime: G.dayTime, time: G.time,
-    wonders: G.wonders.slice(),
-    wonderList: G.wonderList.map(w=>({era:w.era,x:w.x,y:w.y,prog:w.prog,done:w.done?1:0})),
-    boostGrow: G.boostGrow, boostBuild: G.boostBuild, boostRain: G.boostRain,
+    seed: G.seed|0, era: G.era|0, speed: G.speed|0, over: G.over,
+    power: r2(G.power), faith: r2(G.faith), totalFaith: r2(G.totalFaith),
+    pop: r2(G.pop), stars: G.stars|0, starProg: r3(G.starProg),
+    dayTime: r3(G.dayTime), time: r2(G.time),
+    wonders: G.wonders.map(v=>v?1:0),
+    wonderList: G.wonderList.map(w=>({era:w.era|0,x:w.x|0,y:w.y|0,prog:r3(w.prog),done:w.done?1:0})),
+    boostGrow: r2(G.boostGrow), boostBuild: r2(G.boostBuild), boostRain: r2(G.boostRain),
     chunks,
-    logs: logEncode(G.logs),
+    logs: logSlice,
     savedAt: Date.now(),
   };
 }

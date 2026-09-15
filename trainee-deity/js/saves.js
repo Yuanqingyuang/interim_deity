@@ -26,8 +26,20 @@ export function readMeta(userKey, slot){
   }catch{ return null; }
 }
 
+/**
+ * 写档（同步 localStorage）。返回 meta（含 _stats）或 null。
+ * Console 记录 stringify / setItem 耗时与体积，便于定位卡死。
+ */
 export function writeSave(userKey, slot, serializeFn, metaExtra){
-  const body = serializeFn();
+  const t0 = performance.now();
+  let body;
+  try{
+    body = serializeFn();
+  }catch(e){
+    console.error('[save] serialize failed', slot, e);
+    return null;
+  }
+  const tSer = performance.now();
   const meta = {
     name: metaExtra?.name || SLOT_LABEL[slot],
     seed: body.seed|0,
@@ -36,13 +48,34 @@ export function writeSave(userKey, slot, serializeFn, metaExtra){
     savedAt: Date.now(),
     v: body.v,
   };
+  let payload;
   try{
-    localStorage.setItem(slotKey(userKey, slot), JSON.stringify({ meta, body }));
-    return meta;
+    payload = JSON.stringify({ meta, body });
   }catch(e){
-    console.warn('save failed', e);
+    console.error('[save] stringify failed', slot, e);
     return null;
   }
+  const tStr = performance.now();
+  try{
+    localStorage.setItem(slotKey(userKey, slot), payload);
+  }catch(e){
+    // QuotaExceeded 等
+    console.error('[save] setItem failed', slot, { bytes: payload.length, err: e });
+    return null;
+  }
+  const tEnd = performance.now();
+  const stats = {
+    chunks: body.chunks?.length || 0,
+    logs: body.logs?.length || 0,
+    bytes: payload.length,
+    kb: Math.round(payload.length / 1024),
+    serMs: +(tSer - t0).toFixed(1),
+    strMs: +(tStr - tSer).toFixed(1),
+    setMs: +(tEnd - tStr).toFixed(1),
+    totalMs: +(tEnd - t0).toFixed(1),
+  };
+  console.info('[save]', slot, stats);
+  return { ...meta, _stats: stats };
 }
 
 export function readSave(userKey, slot){
