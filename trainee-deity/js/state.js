@@ -74,7 +74,7 @@ export function createState(seed){
   return {
     era:0, speed:2, started:false, over:false,
     seed: seed != null ? (seed|0) : ((Math.random()*1e9)|0),
-    power:100, powerMax:100, faith:0, totalFaith:0,
+    power:100, faith:0, totalFaith:0,
     pop:20, stars:0, starProg:0, faithRate:0,
     // R5：每时代 3 个里程碑完成位图（存档兼容：缺失则全 false）
     starMilestones: [[false,false,false],[false,false,false],[false,false,false],[false,false,false],[false,false,false]],
@@ -124,6 +124,7 @@ export function refreshBuiltCache(G){
 export function invalidateBuiltCache(G){
   if(G._builtCache) G._builtCache.valid = false;
   if(G._zoneCache) G._zoneCache.valid = false;
+  G._pendingValid = false;
 }
 
 export function housingCap(G){

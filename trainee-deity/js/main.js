@@ -75,6 +75,19 @@ function boot(){
     },
     onQuickSave:()=>quickSave(),
     onQuickLoad:()=>quickLoad(),
+    onExportSave:(slot)=>{
+      const json = Saves.exportSaveJson(userKey, slot || 'quick');
+      if(!json){ toast('该槽位为空'); return null; }
+      toast('已导出存档文件');
+      return json;
+    },
+    onImportSave:(json, slot)=>{
+      if(!userKey){ toast('请先登录'); return false; }
+      const ok = Saves.importSaveJson(userKey, slot || 'quick', json);
+      toast(ok ? '导入成功，可读取该槽位' : '导入失败');
+      return ok;
+    },
+    onToast:(m)=>toast(m),
     onToggleLog:()=>toggleLog(),
     onCanvasDown:(px,py,b)=>handleDown(px,py,b),
     onCanvasMove:(px,py)=>handleMove(px,py),
@@ -86,7 +99,6 @@ function boot(){
   R.syncWorld(G);
   R.updateDayLight(G.dayTime, G.era);
   document.getElementById('loader').classList.add('hidden');
-  document.getElementById('seedVal') && (document.getElementById('seedVal').textContent = G.seed);
   window.addEventListener('resize', ()=>R.resize());
   window.addEventListener('keydown', (e)=>{
     if(e.key === 'Escape'){
@@ -408,20 +420,34 @@ function tick(dt){
   let vBuild = F.buildSpeed(E, inds, pending);
   if(G.boostBuild>0) vBuild *= 3;
 
+  // R11：仅推进 pending 列表，避免每帧全图 eachTile
+  if(!G._pendingValid || !G._pendingTiles){
+    const list = [];
+    eachTile(G, (t,x,y)=>{ if(t.zone>0 && !t.built) list.push({x,y}); });
+    G._pendingTiles = list;
+    G._pendingValid = true;
+  }
   let buildChanged = false;
-  eachTile(G, (t, x, y)=>{
-    if(t.zone<=0 || t.built) return;
+  const still = [];
+  for(const p of G._pendingTiles){
+    const t = getTile(G, p.x, p.y);
+    if(!t || t.zone<=0 || t.built) continue;
     t.prog += vBuild * dt;
     if(t.prog >= 1){
       t.prog = 1; t.built = true;
       const col = t.zone===1?0xffb74d : t.zone===2?0x8bc34a : t.zone===3?0x78909c : 0xb39ddb;
-      R.spawnBurst(x*TILE, y*TILE, col, 8);
+      R.spawnBurst(p.x*TILE, p.y*TILE, col, 8);
       buildChanged = true;
-      ensureChunkRing(G, x, y);
-      clearTreesNearZones(G, 1, x, y, 2);
+      ensureChunkRing(G, p.x, p.y);
+      clearTreesNearZones(G, 1, p.x, p.y, 2);
       invalidateBuiltCache(G);
+      G._pendingValid = false;
+    } else {
+      still.push(p);
     }
-  });
+  }
+  if(!buildChanged) G._pendingTiles = still;
+  else G._pendingTiles = still;
   if(buildChanged){
     refreshBuiltCache(G);
     R.syncWorld(G);
@@ -666,7 +692,6 @@ function advanceEra(){
   G.era += 1;
   G.starProg = 0;
   G.terrainDirty = true;
-  G.powerMax = powerMaxOf(G.era);
   R.applyEraVisuals(G);
   R.syncWorld(G);
   syncNpc();

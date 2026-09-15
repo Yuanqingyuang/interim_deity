@@ -89,3 +89,22 @@ export function readSave(userKey, slot){
 export function deleteSave(userKey, slot){
   localStorage.removeItem(slotKey(userKey, slot));
 }
+
+/** R11：导出槽位为 JSON 字符串 */
+export function exportSaveJson(userKey, slot){
+  const raw = localStorage.getItem(slotKey(userKey, slot));
+  if(!raw) return null;
+  return raw;
+}
+
+/** R11：导入 JSON 到槽位（校验 meta/body） */
+export function importSaveJson(userKey, slot, json){
+  let o;
+  try{ o = JSON.parse(json); }catch{ return false; }
+  if(!o || !o.body || !o.meta) return false;
+  if(!o.body.v || !Array.isArray(o.body.chunks)) return false;
+  try{
+    localStorage.setItem(slotKey(userKey, slot), JSON.stringify(o));
+    return true;
+  }catch{ return false; }
+}

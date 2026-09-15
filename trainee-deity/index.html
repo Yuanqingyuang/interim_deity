@@ -8,8 +8,8 @@
   <script type="importmap">
   {
     "imports": {
-      "three": "https://unpkg.com/three@0.161.0/build/three.module.js",
-      "three/addons/": "https://unpkg.com/three@0.161.0/examples/jsm/"
+      "three": "./vendor/three@0.161.0/three.module.js",
+      "three/addons/": "./vendor/three@0.161.0/examples/jsm/"
     }
   }
   </script>
@@ -54,6 +54,9 @@
       <h1 class="title" id="saveDialogTitle">存档</h1>
       <div id="saveSlotList" class="slot-list"></div>
       <div class="dlg-actions">
+        <button id="saveExportBtn" class="btn-secondary">导出</button>
+        <button id="saveImportBtn" class="btn-secondary">导入</button>
+        <input type="file" id="saveImportFile" accept="application/json,.json" class="hidden" />
         <button id="saveDialogClose" class="btn-secondary">关 闭</button>
       </div>
       <p class="hint" id="saveDialogHint"></p>

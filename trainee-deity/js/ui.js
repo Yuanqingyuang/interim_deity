@@ -35,7 +35,6 @@ export class UI {
       eraRoman: document.querySelector('.era-roman'),
       eraName: document.querySelector('.era-name'),
       dayVal: $('dayVal'),
-      seedVal: $('seedVal'),
       autoLog: $('autoLog'),
       wonderBtn: $('wonderBtn'),
     };
@@ -77,6 +76,8 @@ export class UI {
       this._authMode = 'register';
       $('tabReg').classList.add('active'); $('tabLogin')?.classList.remove('active');
       $('authBtn').textContent = '注 册';
+      const pw = $('authPw');
+      if(pw) pw.setAttribute('autocomplete', 'new-password');
     });
     $('authPw')?.addEventListener('keydown', (e)=>{ if(e.key==='Enter') this.h.onAuth?.(); });
     $('newGameBtn')?.addEventListener('click', ()=>this.h.onNewGame?.());
@@ -92,6 +93,30 @@ export class UI {
     $('logBtn')?.addEventListener('click', ()=>this.h.onToggleLog?.());
     $('logClose')?.addEventListener('click', ()=>this.h.onToggleLog?.());
     $('saveDialogClose')?.addEventListener('click', ()=>this.h.onCloseSaves?.());
+    // R11 导出/导入
+    $('saveExportBtn')?.addEventListener('click', ()=>{
+      const slot = this._exportSlot || 'quick';
+      const json = this.h.onExportSave?.(slot);
+      if(!json){ /* toast 由 main 处理 */ return; }
+      const blob = new Blob([json], { type: 'application/json' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = `trainee-deity-${slot}-${Date.now()}.json`;
+      a.click();
+      URL.revokeObjectURL(a.href);
+    });
+    $('saveImportBtn')?.addEventListener('click', ()=> $('saveImportFile')?.click());
+    $('saveImportFile')?.addEventListener('change', (e)=>{
+      const f = e.target.files?.[0];
+      if(!f) return;
+      const reader = new FileReader();
+      reader.onload = ()=>{
+        const ok = this.h.onImportSave?.(String(reader.result||''), this._exportSlot || 'quick');
+        if(ok === false) this.h.onToast?.('导入失败：格式无效');
+      };
+      reader.readAsText(f);
+      e.target.value = '';
+    });
 
     const cv = $('gameCanvas');
     // 全局屏蔽右键菜单，避免与相机操作抢浏览器快捷键/菜单
@@ -250,7 +275,6 @@ export class UI {
     else if(t < 0.80){ phase='日落'; icon='🌇'; }
     else { phase='夜晚'; icon='🌙'; }
     if(e.dayVal) e.dayVal.textContent = `${icon} ${phase}`;
-    if(e.seedVal) e.seedVal.textContent = String(G.seed);
     if(e.autoLog && G.autoLog.length) e.autoLog.textContent = G.autoLog[0];
   }
 }

@@ -29,8 +29,9 @@ server {
 ## 注意
 
 - ES Module **不能**用 `file://` 打开
-- Three.js 自 unpkg，客户端需外网；可改为本地 vendor 并改 `importmap`
-- 账号与存档在**浏览器 localStorage**，与服务器无关
+- Three.js 已本地 vendor：`vendor/three@0.161.0/`（importmap 指向本地，离线可玩）
+- 账号与存档在**浏览器 localStorage**；密码为本机 PBKDF2，**非安全边界**
+- 存档对话框支持导出/导入 JSON
 
 ## 本地调试
 

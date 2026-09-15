@@ -59,4 +59,4 @@ commits: 22aebb3..HEAD
 - [x] T8: R8 自动保存+产出口径 (covers: S2)
 - [x] T9: R9 UI/绿化 (covers: S2)
 - [x] T10: R10 端手+引导 (covers: S2)
-- [ ] T11: R11 P3 可选 — acceptance: vendor/PBKDF2/导入导出等 (covers: S2)
+- [x] T11: R11 P3 — vendor three、PBKDF2、导入导出、pending 列表、死代码、公式断言 (covers: S2)
