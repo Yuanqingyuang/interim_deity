@@ -13,6 +13,7 @@ import { cornerColor, heightAt, riverMask, sampleHeight } from './terrain.js';
 import { getTile, eachTile, chunkBounds, tileLive } from './state.js';
 
 const WATER_Y = WATER_LEVEL;
+const MIN_H_SAFE = 0.22;
 
 export class Renderer {
   constructor(canvas){
@@ -69,14 +70,19 @@ export class Renderer {
     this.controls.maxDistance = 90;
     this.controls.target.set(c, 4, c);
     this.controls.update();
+    // 城建常见操作（Cities / SimCity 系）：
+    // 左键=工具（导航工具时旋转）· 右键拖动=旋转 · 中键拖动=平移 · 滚轮=缩放
+    // Shift+右键=平移 · WASD=平移 · Q/E=水平旋转
     this.controls.touches = { ONE: null, TWO: THREE.TOUCH.DOLLY_PAN };
-    // 左键留给施法；中键平移；右键旋转（配合屏蔽浏览器右键菜单）
     this.controls.mouseButtons = {
       LEFT: null,
       MIDDLE: THREE.MOUSE.PAN,
       RIGHT: THREE.MOUSE.ROTATE
     };
     this.controls.enablePan = true;
+    this._navMode = false;
+    this._keys = { w:false, a:false, s:false, d:false, q:false, e:false, shift:false };
+    this._bindCameraKeys(canvas);
 
     this.terrainMesh = null;
     this.waterMesh = null;
@@ -441,6 +447,19 @@ export class Renderer {
     this._wildInst = null;
   }
 
+  /** 与地形网格一致的「格心」高度：自格+四邻平均，避免建筑埋进坡里 */
+  _surfaceY(G, x, y){
+    const hOf = (wx, wy)=>{
+      const t = getTile(G, wx, wy);
+      if(t) return t.water ? WATER_Y : Math.max(MIN_H_SAFE, t.h);
+      return Math.max(MIN_H_SAFE, sampleHeight(wx, wy, G.seed));
+    };
+    const h = (
+      hOf(x, y) + hOf(x+1, y) + hOf(x-1, y) + hOf(x, y+1) + hOf(x, y-1)
+    ) / 5;
+    return h;
+  }
+
   _buildWildDeco(G, ox, oy, GW, GH, seed, era){
     this._clearWildInst();
     const p = PALETTES[era];
@@ -453,20 +472,22 @@ export class Renderer {
     for(let wy=oy; wy<oy+GH; wy+=step){
       for(let wx=ox; wx<ox+GW; wx+=step){
         if(getTile(G, wx, wy)) continue;
-        const h = heightAt(wx+0.5, wy+0.5, seed);
-        if(h <= WATER_Y+0.1) continue;
+        // 必须用 sampleHeight（含河道），否则河床上会长树
+        const h = sampleHeight(wx+0.5, wy+0.5, seed);
+        if(h <= WATER_Y+0.18) continue;
         const r = ((wx*73856093) ^ (wy*19349663) ^ seed) >>> 0;
         const rn = (r % 1000)/1000;
-        if(rn < 0.18 && h>1.3 && h<5.8){
+        if(rn < 0.14 && h>1.45 && h<5.6){
           const sx = wx*TILE+0.5*((r%7)/7-0.5);
           const sz = wy*TILE+0.5*(((r>>3)%7)/7-0.5);
           const s = 0.7+((r>>4)%10)/20;
           const useAlt = ((r>>8)&1)===1;
-          trunks.push({x:sx, y:h+0.2, z:sz, s:1});
-          if(useAlt) topsIco.push({x:sx, y:h+0.55, z:sz, s});
-          else topsCone.push({x:sx, y:h+0.85, z:sz, s});
-        } else if(rn < 0.28 && h>2.5){
-          rocks.push({x:wx*TILE, y:h+0.1, z:wy*TILE, s:0.6+rn});
+          // 树根略抬，减少与地表 z-fight
+          trunks.push({x:sx, y:h+0.12, z:sz, s:1});
+          if(useAlt) topsIco.push({x:sx, y:h+0.48, z:sz, s});
+          else topsCone.push({x:sx, y:h+0.78, z:sz, s});
+        } else if(rn < 0.26 && h>2.6){
+          rocks.push({x:wx*TILE, y:h+0.08, z:wy*TILE, s:0.6+rn});
         }
       }
     }
@@ -1002,7 +1023,8 @@ export class Renderer {
   syncWorld(G){
     eachTile(G, (t, x, y)=>{
       t._wx = x*TILE; t._wz = y*TILE;
-      t._wy = t.water ? WATER_Y : Math.max(0.3, t.h);
+      // 建筑/树用邻域平均高，减少坡地穿模
+      t._wy = t.water ? WATER_Y : this._surfaceY(G, x, y);
     });
 
     // 建筑 / 农田（视觉上限：超过后抽样代表格，逻辑数不变）
@@ -1025,7 +1047,8 @@ export class Renderer {
         }
         const m = this.buildingMeshes.get(key);
         if(m){
-          m.position.set(t._wx, t._wy, t._wz);
+          // 底面略埋入地表 0.02，避免缝隙；高度用邻域均值
+          m.position.set(t._wx, t._wy - 0.02, t._wz);
           m.visible = true;
           const prog = t.built ? 1 : Math.max(0.15, t.prog);
           const zs = ZONES[t.zone];
@@ -1041,14 +1064,15 @@ export class Renderer {
     const seenT = new Set();
     eachTile(G, (t, x, y)=>{
       const key = `${x},${y}`;
-      if(t.tree && !t.water){
+      // 水面/极浅滩不长树
+      if(t.tree && !t.water && t.h > WATER_Y + 0.15){
         seenT.add(key);
         if(!this.treeMeshes.has(key)){
           const m = this.makeTree(t.h, G.era, t.variant);
           this.treeGroup.add(m); this.treeMeshes.set(key,m);
         }
         const m = this.treeMeshes.get(key);
-        if(m) m.position.set(t._wx, t._wy, t._wz);
+        if(m) m.position.set(t._wx, t._wy - 0.05, t._wz);
       }
     });
     for(const [key, m] of this.treeMeshes){
@@ -1066,8 +1090,8 @@ export class Renderer {
       const m = this.wonderMeshes.get(key);
       if(m){
         const t = getTile(G, w.x, w.y);
-        const wy = t ? (t.water ? WATER_Y : Math.max(0.3, t.h)) : heightAt(w.x,w.y,G.seed);
-        m.position.set(w.x*TILE, wy-0.1, w.y*TILE);
+        const wy = t ? (t.water ? WATER_Y : this._surfaceY(G, w.x, w.y)) : sampleHeight(w.x,w.y,G.seed);
+        m.position.set(w.x*TILE, wy-0.05, w.y*TILE);
         const prog = w.done ? 1 : Math.max(0.1, w.prog);
         m.scale.setScalar(0.3 + prog*0.7);
       }
@@ -1284,8 +1308,8 @@ export class Renderer {
     const ty = Math.round(m.position.z / TILE);
     const tile = getTile(G, tx, ty);
     const ground = !tile
-      ? heightAt(tx, ty, G.seed)
-      : (tile.water ? WATER_Y : Math.max(0.3, tile.h));
+      ? sampleHeight(tx, ty, G.seed)
+      : (tile.water ? WATER_Y : this._surfaceY(G, tx, ty));
     m.position.y = ground + bob;
   }
 
@@ -1412,6 +1436,96 @@ export class Renderer {
     this.camera.aspect = window.innerWidth/window.innerHeight;
     this.camera.updateProjectionMatrix();
     this.renderer.setSize(window.innerWidth, window.innerHeight);
+  }
+
+  _bindCameraKeys(canvas){
+    const setKey = (e, down)=>{
+      const k = e.key?.toLowerCase();
+      if(!k) return;
+      const map = { w:'w', a:'a', s:'s', d:'d', q:'q', e:'e' };
+      if(k in map){
+        this._keys[map[k]] = down;
+        // 游戏中避免方向键/字母触发浏览器
+        if(down) e.preventDefault();
+      }
+      if(k === 'shift') this._keys.shift = down;
+    };
+    window.addEventListener('keydown', (e)=>setKey(e, true));
+    window.addEventListener('keyup', (e)=>setKey(e, false));
+    window.addEventListener('blur', ()=>{
+      this._keys = { w:false, a:false, s:false, d:false, q:false, e:false, shift:false };
+    });
+    // Shift + 右键 = 平移（OrbitControls 用 RIGHT=PAN 临时切换）
+    let shiftRmb = false;
+    canvas.addEventListener('pointerdown', (e)=>{
+      if(e.button === 2 && e.shiftKey){
+        shiftRmb = true;
+        this.controls.mouseButtons.RIGHT = THREE.MOUSE.PAN;
+      }
+    });
+    window.addEventListener('pointerup', (e)=>{
+      if(shiftRmb && e.button === 2){
+        shiftRmb = false;
+        this.controls.mouseButtons.RIGHT = this._navMode ? THREE.MOUSE.ROTATE : THREE.MOUSE.ROTATE;
+      }
+    });
+  }
+
+  /** 每帧：WASD 平移 + Q/E 水平旋转（城建标配） */
+  updateCameraKeys(dt){
+    if(!this.controls) return;
+    const k = this._keys;
+    const moving = k.w || k.a || k.s || k.d || k.q || k.e;
+    if(!moving) return;
+    const target = this.controls.target;
+    const cam = this.camera.position;
+    const offset = cam.clone().sub(target);
+    const radius = offset.length();
+    // 地平面朝向
+    let yaw = Math.atan2(offset.x, offset.z);
+    if(k.q) yaw += dt * 1.1;
+    if(k.e) yaw -= dt * 1.1;
+    const speed = (12 + radius * 0.15) * dt;
+    const fx = Math.sin(yaw), fz = Math.cos(yaw);
+    const rx = Math.cos(yaw), rz = -Math.sin(yaw);
+    let mx = 0, mz = 0;
+    if(k.w){ mx -= fx; mz -= fz; }
+    if(k.s){ mx += fx; mz += fz; }
+    if(k.a){ mx -= rx; mz -= rz; }
+    if(k.d){ mx += rx; mz += rz; }
+    const len = Math.hypot(mx, mz) || 1;
+    const pan = new THREE.Vector3((mx/len)*speed, 0, (mz/len)*speed);
+    if(k.q || k.e){
+      offset.x = Math.sin(yaw) * radius;
+      offset.z = Math.cos(yaw) * radius;
+      cam.copy(target).add(offset);
+    }
+    if(k.w || k.a || k.s || k.d){
+      target.add(pan);
+      cam.add(pan);
+    }
+    this.controls.update();
+  }
+
+  /** 导航工具：左键旋转；普通工具：左键留给施法 */
+  setNavMode(on){
+    this._navMode = !!on;
+    if(!this.controls) return;
+    if(on){
+      this.controls.mouseButtons = {
+        LEFT: THREE.MOUSE.ROTATE,
+        MIDDLE: THREE.MOUSE.PAN,
+        RIGHT: THREE.MOUSE.ROTATE
+      };
+      this.controls.touches = { ONE: THREE.TOUCH.ROTATE, TWO: THREE.TOUCH.DOLLY_PAN };
+    } else {
+      this.controls.mouseButtons = {
+        LEFT: null,
+        MIDDLE: THREE.MOUSE.PAN,
+        RIGHT: THREE.MOUSE.ROTATE
+      };
+      this.controls.touches = { ONE: null, TWO: THREE.TOUCH.DOLLY_PAN };
+    }
   }
 
   // R7 视角：回城 / 俯视 / 跟随居住质心

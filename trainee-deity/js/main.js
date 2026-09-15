@@ -214,17 +214,9 @@ function toMenu(){
 
 let _saving = false;
 
-/** 导航工具：单指/左键旋转；否则施法 */
+/** 导航工具：左键旋转；普通工具左键施法（右键旋转/中键平移始终可用） */
 function setNavMode(on){
-  if(!R?.controls) return;
-  // 0=ROTATE 1=PAN 2=DOLLY_PAN — 用 THREE.MOUSE 数值：LEFT=0, MIDDLE=1, RIGHT=2
-  if(on){
-    R.controls.mouseButtons = { LEFT: 0, MIDDLE: 1, RIGHT: 2 };
-    R.controls.touches = { ONE: 0, TWO: 2 };
-  } else {
-    R.controls.mouseButtons = { LEFT: null, MIDDLE: 1, RIGHT: 0 };
-    R.controls.touches = { ONE: null, TWO: 2 };
-  }
+  R?.setNavMode?.(on);
 }
 
 function doSave(slot){
@@ -394,6 +386,7 @@ function loop(now){
     R.syncWorld(G);
     entitySyncAcc = 0;
   }
+  R.updateCameraKeys?.(dt);
   R.updateWater(G.time);
   R.updateParticles(dt);
   R.updateNpcs(dt, G);

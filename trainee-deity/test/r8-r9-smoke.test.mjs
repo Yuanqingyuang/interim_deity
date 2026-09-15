@@ -9,7 +9,7 @@ function assert(cond, msg){
 }
 
 assert(TOOLS.demolish, 'demolish tool exists');
-assert(TOOLS.raise.strength === 1.7, 'raise strength');
+assert(TOOLS.raise.strength === 0.9, 'raise strength');
 
 const G = createState(11);
 genWorld(G);

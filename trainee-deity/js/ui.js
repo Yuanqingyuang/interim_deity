@@ -125,30 +125,60 @@ export class UI {
     document.addEventListener('contextmenu', (e)=>{
       if(e.target === cv || cv.contains(e.target)) e.preventDefault();
     });
+    // ---- 视角 vs 浏览器手势隔离 ----
+    // 1) 中键/右键/滚轮在画布上一律 preventDefault，避免自动滚动、页面缩放、后退手势
+    // 2) 触控双指交给 OrbitControls（DOLLY_PAN），单指=当前工具
+    // 3) Alt+方向键 / Alt+Left（部分浏览器后退）在游戏进行时拦截
+    const blockKeys = new Set(['ArrowLeft','ArrowRight','ArrowUp','ArrowDown','Backspace']);
+    const onKey = (e)=>{
+      if(!this.G?.started) return;
+      // Alt+Left 等：浏览器后退
+      if(e.altKey && (e.key === 'ArrowLeft' || e.key === 'Left' || e.button === 3)){
+        e.preventDefault();
+      }
+      if(e.altKey && blockKeys.has(e.key)) e.preventDefault();
+    };
+    window.addEventListener('keydown', onKey, true);
+
     const down = (e)=>{
-      // 中键 / 右键：交给相机，禁止浏览器默认
       if(e.button === 1 || e.button === 2){
         e.preventDefault();
         e.stopPropagation();
       }
       const t = e.touches ? e.touches[0] : e;
-      // 0=左键施法  1=中键平移  2=右键旋转
+      // 触控：多指只给 OrbitControls，不施法
+      if(e.touches && e.touches.length > 1){
+        this.h.onCanvasUp();
+        return;
+      }
       const btn = e.touches ? 0 : e.button;
       this.h.onCanvasDown(t.clientX, t.clientY, btn);
     };
     const move = (e)=>{
+      if(e.touches && e.touches.length > 1){ this.h.onCanvasUp(); return; }
       const t = e.touches ? e.touches[0] : e;
       this.h.onCanvasMove(t.clientX, t.clientY);
     };
     const up = ()=>this.h.onCanvasUp();
+    const wheel = (e)=>{
+      // 缩放只作用于相机，禁止触发浏览器整页缩放/历史手势链
+      e.preventDefault();
+      e.stopPropagation();
+    };
     cv.addEventListener('mousedown', down);
     cv.addEventListener('mousemove', move);
     window.addEventListener('mouseup', up);
-    cv.addEventListener('touchstart', down, {passive:false});
-    cv.addEventListener('touchmove', move, {passive:false});
+    cv.addEventListener('wheel', wheel, { passive: false });
+    cv.addEventListener('pointerdown', (e)=>{
+      if(e.button === 1 || e.button === 2) e.preventDefault();
+    }, { passive: false });
+    cv.addEventListener('touchstart', down, { passive: false });
+    cv.addEventListener('touchmove', move, { passive: false });
     window.addEventListener('touchend', up);
     cv.addEventListener('contextmenu', e=>{ e.preventDefault(); e.stopPropagation(); });
     cv.addEventListener('auxclick', e=>e.preventDefault());
+    // 中键自动滚动（Windows）
+    cv.addEventListener('mousedown', e=>{ if(e.button===1) e.preventDefault(); }, { passive: false });
   }
 
   setWonderPlacing(on){

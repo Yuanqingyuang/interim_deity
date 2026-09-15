@@ -17,9 +17,9 @@ const c = mulberry32(43);
 assert(c() !== seqA[0], 'different seed differs');
 
 // TOOLS strength
-assert(TOOLS.raise.strength === 1.7, 'raise strength 1.7');
-assert(TOOLS.lower.strength === 1.7, 'lower strength 1.7');
-assert(Math.abs(TOOLS.raise.strength / 3.4 - 0.5) < 0.01, 'raise ~50% of original 3.4');
+assert(TOOLS.raise.strength === 0.9, 'raise strength 0.9');
+assert(TOOLS.lower.strength === 0.9, 'lower strength 0.9');
+assert(TOOLS.raise.strength < 3.4*0.4, 'raise slower than 40% of original');
 
 // 地形 1s 抬升（dt=0.016 * 60 帧 ≈ 1s，f≈1 中心）
 const G1 = createState(7); genWorld(G1);
@@ -32,8 +32,8 @@ for(let i=0;i<60;i++) applyTool(G1, flat[0], flat[1], 0.016);
 const h1 = getTile(G1, flat[0], flat[1]).h;
 const delta = h1 - h0;
 // 原强度 3.4*1s ≈ 3.4（边缘衰减后更少）；新应 ≤ 原 60%
-assert(delta < 3.4 * 0.7, `raise 1s delta ${delta.toFixed(2)} < ~2.4`);
-assert(delta > 0.2, `still raisable ${delta.toFixed(2)}`);
+assert(delta < 1.2, `raise 1s delta ${delta.toFixed(2)} < 1.2`);
+assert(delta > 0.08, `still raisable ${delta.toFixed(2)}`);
 
 // autoRng 同 G 同 salt 同序列
 const GA = createState(100); GA.time = 12;

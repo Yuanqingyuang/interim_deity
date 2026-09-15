@@ -307,19 +307,25 @@ export function applyTool(G, hx, hy, dt){
   const y1 = Math.ceil(hy + reach);
 
   const cx = Math.round(hx), cy = Math.round(hy);
-  // 平整目标：笔刷半径内非水格的局部均值（更稳，避免跟着单格抖）
-  let hSum = 0, hN = 0;
+  // 平整：笔刷内高度中位数 + 中心加权，抗离群点、避免被水坑/高峰拽跑
+  const samples = [];
   const pr = Math.max(1, Math.round(R));
   for(let dy=-pr; dy<=pr; dy++)
     for(let dx=-pr; dx<=pr; dx++){
       if(dx*dx + dy*dy > pr*pr) continue;
       const a = getTile(G, cx+dx, cy+dy);
       if(!a || a.water) continue;
-      hSum += a.h; hN++;
+      samples.push(a.h);
     }
-  const flattenTarget = hN > 0
-    ? Math.max(1.15, Math.min(5.0, hSum / hN))
-    : 2.0;
+  samples.sort((a,b)=>a-b);
+  const median = samples.length
+    ? samples[samples.length >> 1]
+    : (getTile(G, cx, cy)?.h ?? 2.0);
+  const centerH = getTile(G, cx, cy) && !getTile(G, cx, cy).water
+    ? getTile(G, cx, cy).h
+    : median;
+  // 目标 = 中位数为主，略向中心高度靠（保留玩家在高台/洼地的手感）
+  const flattenTarget = Math.max(1.12, Math.min(5.2, median * 0.75 + centerH * 0.25));
 
   let used = 0;
   for(let y=y0;y<=y1;y++){
@@ -333,18 +339,21 @@ export function applyTool(G, hx, hy, dt){
 
       if(tool.kind === 'terrain'){
         if(G.tool === 'raise'){
-          if(t.water){ t.water=0; t.h = 1.0; }
-          else { t.h = Math.min(MAXH, t.h + (tool.strength ?? 1.7)*dt*f); }
+          if(t.water){ t.water=0; t.h = Math.max(1.0, WATER_LEVEL + 0.05); }
+          else { t.h = Math.min(MAXH, t.h + (tool.strength ?? 0.9)*dt*f); }
         } else if(G.tool === 'lower'){
-          t.h = Math.max(MINH, t.h - (tool.strength ?? 1.7)*dt*f);
+          t.h = Math.max(MINH, t.h - (tool.strength ?? 0.9)*dt*f);
           if(t.h <= WATER_LEVEL){ t.water=1; t.tree=0; }
         } else if(G.tool === 'flatten'){
-          // 羽化：中心强、边缘弱；向局部均值靠拢
-          t.water = 0;
-          const pull = Math.min(1, (tool.strength ?? 1.4) * dt * f * f);
-          t.h = t.h + (flattenTarget - t.h) * pull;
-          if(t.h < 1.08) t.h = 1.08;
-          if(t.tree && f > 0.25) t.tree = 0;
+          // 限速逼近：单帧最大位移，避免猛拽；仅在高于水面时强制抬离水
+          const k = Math.min(1, (tool.strength ?? 1.1) * dt * (0.35 + 0.65 * f));
+          const next = t.h + (flattenTarget - t.h) * k;
+          const maxStep = 0.55 * dt * 60 * f; // 约 0.55 单位/秒 @ f=1
+          t.h = t.h + Math.max(-maxStep, Math.min(maxStep, next - t.h));
+          if(t.h < 1.10) t.h = 1.10;
+          if(t.h > 5.2) t.h = 5.2;
+          if(t.water && t.h > WATER_LEVEL + 0.02){ t.water = 0; }
+          if(t.tree && f > 0.2) t.tree = 0;
         } else if(G.tool === 'water'){
           if(!t.water && t.h < 2.8){ t.water=1; t.tree=0; t.h = Math.min(t.h,0.7); }
         } else if(G.tool === 'tree'){
@@ -363,33 +372,55 @@ export function applyTool(G, hx, hy, dt){
   }
 }
 
+function mixRGB(a, b, t){
+  const k = Math.max(0, Math.min(1, t));
+  return { r: a.r+(b.r-a.r)*k, g: a.g+(b.g-a.g)*k, b: a.b+(b.b-a.b)*k };
+}
+function smoothstep(a, b, x){
+  const t = Math.max(0, Math.min(1, (x - a) / (b - a || 1e-6)));
+  return t * t * (3 - 2 * t);
+}
+
+/**
+ * 高度 → 地表色：连续混色，避免色带硬切。
+ * 带：河床 → 沙 → 草 → 深草 → 岩 → 雪
+ */
 export function cornerColor(h, adjWater, hRight, hDown, era=0){
   const p = PALETTES[Math.max(0, Math.min(4, era|0))] || PALETTES[0];
-  const beachTop = WATER_LEVEL + 0.95;
+  const bed = hexRGB(0x8a7a5a);
+  const sand = hexRGB(p.sand);
+  const grass = hexRGB(p.grass);
+  const grass2 = hexRGB(p.grass2);
+  const rock = hexRGB(p.rock);
+  const snow = hexRGB(p.snow);
+
+  // 关键高度（与 WATER_LEVEL=0.75、MAXH≈9 对齐）
+  const h0 = WATER_LEVEL - 0.35;   // 深河床
+  const h1 = WATER_LEVEL + 0.05;   // 水线
+  const h2 = WATER_LEVEL + 0.95;   // 沙→草
+  const h3 = 2.8;                  // 草→深草
+  const h4 = 4.3;                  // 深草→岩
+  const h5 = 6.2;                  // 岩→雪
+
   let c;
-  // 水下/近岸用沙色过渡，避免整图发蓝；水面由水 mesh 单独画
-  if(h <= WATER_LEVEL + 0.12){
-    // 河床：偏沙褐，不染成亮蓝
-    const k = Math.max(0, Math.min(1, (WATER_LEVEL + 0.12 - h) / 0.8));
-    const sand = hexRGB(p.sand), deep = hexRGB(0x8a7a5a);
-    c = {
-      r: sand.r*(1-k) + deep.r*k,
-      g: sand.g*(1-k) + deep.g*k,
-      b: sand.b*(1-k) + deep.b*k,
-    };
-  } else if(h < beachTop){
-    c = hexRGB(p.sand);
-  } else if(h > 5.5){
-    c = hexRGB(p.snow);
-  } else if(h > 4.2){
-    c = hexRGB(p.rock);
-  } else if(h > beachTop + 0.8){
-    c = hexRGB(p.grass2);
+  if(h <= h1){
+    c = mixRGB(bed, sand, smoothstep(h0, h1, h));
+  } else if(h <= h2){
+    c = mixRGB(sand, grass, smoothstep(h1, h2, h) * 0.85);
+  } else if(h <= h3){
+    c = mixRGB(grass, grass2, smoothstep(h2, h3, h));
+  } else if(h <= h4){
+    c = mixRGB(grass2, rock, smoothstep(h3, h4, h));
+  } else if(h <= h5){
+    c = mixRGB(rock, snow, smoothstep(h4, h5, h));
   } else {
-    c = hexRGB(p.grass);
+    c = snow;
   }
-  const sh = Math.max(0.55, Math.min(1.45, 1 + (h-(hRight||h))*0.10 + (h-(hDown||h))*0.07));
-  return { r:c.r*sh, g:c.g*sh, b:c.b*sh };
+
+  // 邻差微阴影（比原先更弱，避免条带感）
+  const dh = (h - (hRight ?? h)) * 0.06 + (h - (hDown ?? h)) * 0.04;
+  const sh = Math.max(0.72, Math.min(1.28, 1 + dh));
+  return { r: c.r * sh, g: c.g * sh, b: c.b * sh };
 }
 
 function hexRGB(hex){

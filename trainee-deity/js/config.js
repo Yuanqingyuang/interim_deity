@@ -79,9 +79,10 @@ export const SUN_KEYS = [
 
 export const TOOLS = {
   // R4：强度系数 ~50%（原 3.4 → 1.7），可塑但不瞬间改天
-  raise: { cost:6, radius:1.8, kind:'terrain', strength:1.7 },
-  lower: { cost:6, radius:1.8, kind:'terrain', strength:1.7 },
-  flatten: { cost:8, radius:2.0, kind:'terrain', strength:1.4 },
+  // 再降一档：约原稿 3.4 的 26%
+  raise: { cost:6, radius:1.8, kind:'terrain', strength:0.9 },
+  lower: { cost:6, radius:1.8, kind:'terrain', strength:0.9 },
+  flatten: { cost:8, radius:2.2, kind:'terrain', strength:1.1 },
   water: { cost:8, radius:1.8, kind:'terrain' },
   tree:  { cost:5, radius:1.8, kind:'terrain' },
   z_res: { cost:4, radius:1.3, kind:'zone', zone:1 },
