@@ -160,6 +160,48 @@ export const FACTORY_STYLE = {
   smoke: 0xb0b8c0,
 };
 
+// 农田作物色（随时代微变）
+export const FARM_CROP = [
+  [0x6fbe3a, 0x8bc34a, 0x9ccc65],
+  [0x7cb342, 0x9ccc65, 0xaed581],
+  [0x8bc34a, 0xa5d6a7, 0xc5e1a5],
+  [0x9e9d24, 0xc0ca33, 0xd4e157],
+  [0x00bfa5, 0x64ffda, 0xa7ffeb],
+];
+export const FARM_SOIL = [0x8b6914, 0x7a5c2e, 0x6d4c41, 0x5d4037, 0x37474f];
+
+/** 教堂：基色 + 时代叠色 */
+export function churchStyleForEra(era){
+  const e = Math.max(0, Math.min(4, era|0));
+  const tints = [
+    { wall:0xf3ece1, roof:0x45525e, accent:0xc9a227 },
+    { wall:0xefe6d4, roof:0x3d4a56, accent:0xd4af37 },
+    { wall:0xe8e0d0, roof:0x35414c, accent:0xe0c060 },
+    { wall:0xdde5ec, roof:0x2f3a48, accent:0x90a4ae },
+    { wall:0xd0e8ff, roof:0x1a237e, accent:0x80cbc4 },
+  ];
+  const tint = tints[e];
+  return {
+    ...CHURCH_STYLE,
+    wall: tint.wall, roof: tint.roof, accent: tint.accent,
+    scaleBoost: 1 + e * 0.08,
+  };
+}
+
+/** 工厂：时代金属/混凝土差分 */
+export function factoryStyleForEra(era){
+  const e = Math.max(0, Math.min(4, era|0));
+  const tints = [
+    { wall:0x8b949e, roof:0x555e68, brick:0x7a5c4e },
+    { wall:0x78909c, roof:0x455a64, brick:0x6d4c41 },
+    { wall:0x607d8b, roof:0x37474f, brick:0x5d4037 },
+    { wall:0x546e7a, roof:0x263238, brick:0x4e342e },
+    { wall:0x4dd0e1, roof:0x006064, brick:0x37474f, glow:0x00e5ff },
+  ];
+  const tint = tints[e];
+  return { ...FACTORY_STYLE, wall: tint.wall, roof: tint.roof, brick: tint.brick, eraGlow: tint.glow || 0 };
+}
+
 export const ZONES = {
   1:{ key:'z_res', name:'居住', color:0xc4a574, hMul:1.0 },
   2:{ key:'z_agr', name:'农田', color:0x8fbc5a, hMul:0.0, noBuilding:true },

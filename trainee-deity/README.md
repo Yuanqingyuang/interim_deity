@@ -44,6 +44,8 @@ python3 -m http.server 8080
 | 中键拖动 | 平移 |
 | 滚轮 | 缩放 |
 | Esc | 暂停菜单 |
+| 导航工具 | 单指/左键旋转（触控） |
+| 拆除工具 | 清除分区，保留地形 |
 
 ---
 
@@ -57,6 +59,8 @@ trainee-deity/
 ├── docs/
 │   ├── project-summary.md
 │   └── deploy.md
+├── vendor/three@0.161.0/
+├── test/
 └── js/
     ├── main.js  config.js  formulas.js
     ├── state.js  terrain.js  render.js
@@ -67,7 +71,7 @@ trainee-deity/
 
 ## ☁️ 部署
 
-见 [docs/deploy.md](docs/deploy.md)。要点：纯静态站、根目录直接是 `index.html`、HTTPS、客户端可访问 unpkg（Three.js）。
+见 [docs/deploy.md](docs/deploy.md)。要点：纯静态站、根目录直接是 `index.html`、HTTPS；Three.js 已本地 vendor。
 
 ---
 

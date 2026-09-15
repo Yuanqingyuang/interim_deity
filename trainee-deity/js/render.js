@@ -6,7 +6,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import {
   TILE, WATER_LEVEL, WILD, FOG_NEAR, FOG_FAR,
   PALETTES, BUILDING_STYLE, ZONES, FOLKCOL, FOLK_HEAD,
-  CHURCH_STYLE, FACTORY_STYLE, CHUNK,
+  CHURCH_STYLE, FACTORY_STYLE, CHUNK, FARM_CROP, FARM_SOIL, churchStyleForEra, factoryStyleForEra,
   sampleSun, lerpHex, hash2
 } from './config.js';
 import { cornerColor, heightAt, riverMask, sampleHeight } from './terrain.js';
@@ -502,6 +502,14 @@ export class Renderer {
     const p = PALETTES[G.era];
     const b = chunkBounds(G);
     const size = ((b.maxX-b.minX+1) + WILD*2 + 50) * TILE;
+    // 世界扩张时重建水面几何
+    if(this.waterMesh && this._waterSize && size > this._waterSize * 1.12){
+      this.scene.remove(this.waterMesh);
+      this.waterMesh.geometry?.dispose();
+      this.waterMesh = null;
+      this.waterGlow = null;
+    }
+    this._waterSize = Math.max(this._waterSize || 0, size);
     if(!this.waterMesh){
       const g = new THREE.PlaneGeometry(size, size, 1, 1);
       g.rotateX(-Math.PI/2);
@@ -580,19 +588,21 @@ export class Renderer {
   // ---- 建筑：三区独立建模，互不复用 ----
   makeBuilding(t, era){
     const z = ZONES[t.zone];
-    if(z.noBuilding) return this._makeFarm(t);
+    if(z.noBuilding) return this._makeFarm(t, era);
     if(t.zone === 4) return this._makeChurch(t, era);
     if(t.zone === 3) return this._makeFactory(t, era);
     return this._makeHouse(t, era);
   }
 
-  _makeFarm(t){
+  _makeFarm(t, era=0){
     const grp = new THREE.Group();
     const varn = t.variant % 3;
-    const field = new THREE.Mesh(this._geo.field, this._mat(0x8b6914));
+    const e = Math.max(0, Math.min(4, era|0));
+    const field = new THREE.Mesh(this._geo.field, this._mat(FARM_SOIL[e] ?? 0x8b6914));
     field.position.y = 0.03; field.receiveShadow = true;
     grp.add(field);
-    const cropCol = [0x6fbe3a, 0x8bc34a, 0x9ccc65][varn];
+    const cropPal = FARM_CROP[e] || FARM_CROP[0];
+    const cropCol = cropPal[varn % cropPal.length];
     for(let i=-1;i<=1;i++){
       const crop = new THREE.Mesh(this._geo.crop, this._mat(cropCol));
       crop.position.set(i*0.2, 0.16 + varn*0.03, 0);
@@ -732,10 +742,10 @@ export class Renderer {
 
   // 信仰区：教堂 — 奶油石墙、深石板尖顶、尖塔十字、玫瑰窗
   _makeChurch(t, era){
-    const C = CHURCH_STYLE;
+    const C = churchStyleForEra(era);
     const grp = new THREE.Group();
     const varn = t.variant % 3;
-    const scale = 1 + era*0.04;
+    const scale = (1 + era*0.04) * (C.scaleBoost || 1);
     const naveH = (0.95 + varn*0.08) * scale;
     const naveW = 0.52;
     const naveL = 0.78;
@@ -843,12 +853,12 @@ export class Renderer {
 
   // 工业区：厂房 — 低矮混凝土体 + 锯齿屋顶 + 砖烟囱 + 装卸口
   _makeFactory(t, era){
-    const F = FACTORY_STYLE;
+    const F = factoryStyleForEra(era);
     const grp = new THREE.Group();
     const varn = t.variant % 3;
-    const bh = (0.55 + varn*0.06) * (1 + era*0.03);
-    const fw = 0.62;
-    const fl = 0.70;
+    const bh = (0.55 + varn*0.06) * (1 + era*0.06);
+    const fw = 0.62 + era*0.02;
+    const fl = 0.70 + era*0.02;
     const wallMat = this._mat(F.wall);
     const sideMat = this._mat(F.side);
     const roofMat = this._mat(F.roof);
