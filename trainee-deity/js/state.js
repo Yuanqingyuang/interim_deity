@@ -1,5 +1,5 @@
 // 实习神明 · GameState（无边界稀疏区块）
-import { MINH, DAY_LENGTH, CHUNK, START_CHUNKS } from './config.js';
+import { MINH, DAY_LENGTH, CHUNK, START_CHUNKS, faithCapOf } from './config.js';
 import { NUM } from './formulas.js';
 import { logInit, logEncode, logDecode } from './log.js';
 
@@ -152,14 +152,22 @@ export const SAVE_LOG_CAP = 400;
 const r2 = (v)=> Math.round(+v * 100) / 100;
 const r3 = (v)=> Math.round(+v * 1000) / 1000;
 
+// 未开发地块只序列化高度（一个数字），开发过的才写完整 7 元组。
+// 一个区块 100 格，绝大多数是「只有高度」的地形格，原先一律写
+// [h,0,0,0,0,0,0] 使得 111 区块的存档膨胀到 230KB+（R1 存档卡死）。
+function encTile(t){
+  const h = r3(t.h);
+  if(!(t.water|0) && !(t.tree|0) && !(t.zone|0) && !(t.variant|0) && !t.built && !(+t.prog))
+    return h;
+  return [h, t.water|0, t.tree|0, t.zone|0, r3(t.prog), t.built?1:0, t.variant|0];
+}
+
 export function serializeState(G){
   const chunks = [];
   for(const ch of G.chunks.values()){
     chunks.push({
       cx: ch.cx, cy: ch.cy,
-      tiles: ch.tiles.map(row => row.map(t => [
-        r3(t.h), t.water|0, t.tree|0, t.zone|0, r3(t.prog), t.built?1:0, t.variant|0
-      ]))
+      tiles: ch.tiles.map(row => row.map(encTile))
     });
   }
   const logs = logEncode(G.logs);
@@ -190,10 +198,16 @@ export function deserializeState(G, data){
       for(let ly=0; ly<CHUNK; ly++){
         const row=[];
         for(let lx=0; lx<CHUNK; lx++){
-          const a = c.tiles?.[ly]?.[lx] || [MINH,0,0,0,0,0,0];
+          // 兼容两种编码：数字 = 只存高度的未开发地块；数组 = 完整 7 元组
+          const a = c.tiles?.[ly]?.[lx];
           const t = makeTile();
-          t.h=+a[0]; t.water=a[1]|0; t.tree=a[2]|0; t.zone=a[3]|0;
-          t.prog=+a[4]; t.built=!!a[5]; t.variant=a[6]|0; t.live=true;
+          if(Array.isArray(a)){
+            t.h=+a[0]; t.water=a[1]|0; t.tree=a[2]|0; t.zone=a[3]|0;
+            t.prog=+a[4]; t.built=!!a[5]; t.variant=a[6]|0;
+          } else if(a != null){
+            t.h = +a || MINH;
+          }
+          t.live = true;
           row.push(t);
         }
         tiles.push(row);
@@ -235,6 +249,9 @@ export function deserializeState(G, data){
   G.over = !!data.over;
   G.power = +data.power || 0;
   G.faith = +data.faith || 0;
+  // 旧存档可能已囤积巨量信仰（旧版本无上限），读档时按当前时代上限收敛
+  const fcap = faithCapOf(G.era);
+  if(G.faith > fcap) G.faith = fcap;
   G.totalFaith = +data.totalFaith || 0;
   G.pop = +data.pop || 20;
   G.stars = data.stars|0;

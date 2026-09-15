@@ -1,6 +1,6 @@
 // 实习神明 · 主循环
 import { TILE, MIRACLES, WONDERS, ERAS, AUTO, TOOLS, MILESTONES, ZONES,
-  powerMaxOf, powerRegenOf, sampleSun } from './config.js';
+  powerMaxOf, powerRegenOf, faithCapOf, sampleSun } from './config.js';
 import { createState, housingCap, faithMult, serializeState, deserializeState,
   refreshBuiltCache, invalidateBuiltCache, getTile, eachTile } from './state.js';
 import { genWorld, applyTool, findAutoSite, placeDistrict, placeIndustryBatch, clearTreesNearZones, ensureChunkRing } from './terrain.js';
@@ -527,6 +527,9 @@ function tick(dt){
   G.faith += faithGain; G.totalFaith += faithGain;
   // R4：信仰禁止为负
   if(G.faith < 0) G.faith = 0;
+  // 信仰库存上限：避免跨时代无限囤积（否则奇迹瞬间建成、信仰经济失效）
+  const faithCap = faithCapOf(G.era);
+  if(G.faith > faithCap) G.faith = faithCap;
 
   const regen = powerRegenOf(G.faithRate);
   G.power = Math.min(powerMaxOf(G.era), G.power + regen*dt);
@@ -664,13 +667,17 @@ function autoBuild(){
   const churchShort = cnt[4] < need[4] || (!G.faithRate || G.faithRate < AUTO.faithPressure);
 
   // 房屋要求「8 邻域全空」（见 canPlaceZoneAt），农田/工业会先占掉这类空格；
-  // 人口已被住房卡满时若仍先放农田/工业，房屋就再也找不到点位 → 人口永久停滞
-  const housingBlocking = houseShort && foodOk && hc > 0 && G.pop >= hc - 0.5;
+  // 人口已被住房卡满时若仍先放农田/工业，房屋就再也找不到点位 → 人口永久停滞。
+  // 更严重的是「一栋房都没有」时必须置顶且不看产能条件：
+  // E1–2 人口上限 = 住房×C_HOUSE，无住房 → popCap=0 → 人口从开局 20 迅速衰减到 1；
+  // 而 tryPlaceIndustry 在 pop<15 时直接放弃 → 无工业 → indOk 恒假 → 永远建不出第一栋房，
+  // 形成死锁（实测：人口卡在 1，农田却一路建到 40+ 格、粮产 45/s）。
+  const housingCritical = houseShort && (hc <= 0 || G.pop >= hc - 0.5);
 
-  if(housingBlocking) tryPlace(1);
+  if(housingCritical) tryPlace(1);
   if(farmShort) tryPlace(2);
   if(indShort) tryPlaceIndustry();
-  if(!housingBlocking && foodOk && indOk && houseShort) tryPlace(1);
+  if(!housingCritical && foodOk && indOk && houseShort) tryPlace(1);
   if(churchShort) tryPlace(4);
 
   // 若本轮啥也没建成且住房仍缺，再补一轮房（放宽资源门槛）
@@ -832,13 +839,34 @@ function updateUI(){
   const list = MILESTONES[E] || [];
   const flags = G.starMilestones?.[E] || [];
   const ms = list.map((m,i)=> (flags[i]?'✓':'○') + m.label.slice(0,6)).join(' ');
-  const wonder = G.era===0 ? '（进阶无需奇迹）' : (G.wonders[G.era]?'奇迹✓':'奇迹✗');
+  const finalEra = G.era >= 4;
+  const popOk = G.pop >= ERAS[G.era].popGoal;
+  const wonderOk = G.era === 0 || !!G.wonders[G.era];
+  const starOk = G.stars >= ERAS[G.era].starCost;
   const indN = G._builtCache?.valid ? (G._builtCache[3]||0) : 0;
   const gate = F.gateOf(E);
   const indOut = F.industryPerSec(indN);
-  const gateTxt = `进阶门槛 ${indOut.toFixed(0)}/${Math.ceil(gate)}/s`;
+  const gateOk = indOut >= gate;
+  const wonder = G.era===0 ? '（进阶无需奇迹）' : (wonderOk?'奇迹✓':'奇迹✗');
+  // 「门槛」与顶栏使用同一数值（GATE(E) = 0.5 × 刚需工业产能），同屏口径一致
+  const gateTxt = `门槛 ${indOut.toFixed(0)}/${Math.ceil(gate)}/s`;
+  // 未满足的条件必须写成可见文本：禁用按钮的 title 在部分浏览器不弹出悬停提示，
+  // 只靠 title 会退回「无法点击又无理由」的死按钮。
+  const miss = [];
+  if(finalEra) miss.push('已是最终时代');
+  else {
+    if(!popOk) miss.push(`人口 ${Math.floor(G.pop)}/${ERAS[G.era].popGoal}`);
+    if(!wonderOk) miss.push('本时代奇迹未建成');
+    if(!starOk) miss.push(`星星 ${G.stars}/${ERAS[G.era].starCost}`);
+    if(!gateOk) miss.push(`产能 ${indOut.toFixed(0)}/${Math.ceil(gate)}/s`);
+  }
   document.getElementById('advReq').textContent =
-    `人口 ${Math.floor(G.pop)}/${ERAS[G.era].popGoal} · ${wonder} · ⭐${G.stars}/${ERAS[G.era].starCost} · ${gateTxt} · ${ms}`;
+    `人口 ${Math.floor(G.pop)}/${ERAS[G.era].popGoal} · ${wonder} · ⭐${G.stars}/${ERAS[G.era].starCost} · ${gateTxt} · ${ms}`
+    + (miss.length ? ` ｜ 还差：${miss.join('、')}` : '');
+  // 按钮文字随「下一时代」重算（原为 index.html 硬编码，进阶后仍写着「城邦时代」）
+  btn.textContent = finalEra ? '已是最终时代' : `时代进阶 · ${ERAS[G.era + 1].name}`;
+  btn.title = finalEra ? 'E5 无法再进阶：建成太空电梯即通关'
+    : (ready ? '条件已满足，点击进入下一时代' : `进阶条件未满足 —— ${miss.join('、')}`);
 }
 
 let toastTimer;

@@ -30,20 +30,23 @@ export const MILESTONES = [
     { id: 'e1farm', label: '农田≥10',   check: (G, c) => c.farms >= 10 },
     { id: 'e1chr',  label: '教堂≥1',    check: (G, c) => c.churches >= 1 },
   ],
+  // 奇迹里程碑必须指向「本时代可建」的奇迹（startWonderPlacement 取 WONDERS[G.era]，
+  // eraReady 亦要求 wonders[G.era]）；若指向上一时代的奇迹则本时代无法建造，
+  // 该里程碑永远无法达成 → 星星恒缺 1 → 时代进阶硬锁死。
   [
     { id: 'e2pop',  label: '人口≥400',  check: (G) => G.pop >= 400 },
     { id: 'e2ind',  label: '工业≥8',    check: (G, c) => c.inds >= 8 },
-    { id: 'e2won',  label: '巨石阵完成', check: (G) => !!G.wonders[0] },
+    { id: 'e2won',  label: '金字塔完成', check: (G) => !!G.wonders[1] },
   ],
   [
     { id: 'e3pop',  label: '人口≥5000', check: (G) => G.pop >= 5000 },
     { id: 'e3farm', label: '农田≥80',   check: (G, c) => c.farms >= 80 },
-    { id: 'e3won',  label: '金字塔完成', check: (G) => !!G.wonders[1] },
+    { id: 'e3won',  label: '大教堂完成', check: (G) => !!G.wonders[2] },
   ],
   [
     { id: 'e4pop',  label: '人口≥50万', check: (G) => G.pop >= 5e5 },
     { id: 'e4ind',  label: '工业≥200',  check: (G, c) => c.inds >= 200 },
-    { id: 'e4won',  label: '大教堂完成', check: (G) => !!G.wonders[2] },
+    { id: 'e4won',  label: '摩天塔完成', check: (G) => !!G.wonders[3] },
   ],
   [
     { id: 'e5pop',  label: '人口≥5000万', check: (G) => G.pop >= 5e7 },
@@ -108,6 +111,16 @@ export const FAITH_FILL_SEC = 100;                              // 满规模下�
 export const FAITH_ERA_DAMP = FAITH_ERA_BASE.map((b, i)=> b / (0.2 * ERAS[i].popGoal));
 // 奇迹信仰消耗由「基准产出 × 目标秒数」推导，保证每个时代攒满所需时间一致
 export const faithCostOf = (E)=> FAITH_ERA_BASE[E] * FAITH_FILL_SEC;
+
+// 信仰库存上限：信仰只有奇迹一个出口，若不设上限会跨时代无限囤积
+// （实测：城邦时代囤到 2300 万，而奇迹只要 1.5 万 → 建成瞬间、信仰经济失效）。
+// 上限取本时代奇迹花费的 2 倍：跨时代最多预存「上一时代上限」（= 本时代的 20%），
+// 仍需约 FAITH_FILL_SEC 秒才能攒满，使「攒信仰→建奇迹」的节奏在每个时代都成立。
+export const FAITH_CAP_MULT = 2;
+export const faithCapOf = (E)=>{
+  const i = Math.max(0, Math.min(FAITH_ERA_BASE.length - 1, E|0));
+  return faithCostOf(i) * FAITH_CAP_MULT;
+};
 
 export const WONDERS = [
   { name:'巨石阵',   faithCost:faithCostOf(0), time:18, bonus:'全时代信仰+10%' },

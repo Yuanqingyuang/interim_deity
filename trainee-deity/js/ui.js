@@ -338,7 +338,19 @@ export class UI {
         e.wonderIco.textContent = WONDER_ICON[G.era] || '💫';
         e.wonderName.textContent = `建${w.name}`;
         e.wonderCost.textContent = `🙏${fmtNum(w.faithCost)}`;
-        e.wonderBtn.title = `${w.name}：${w.bonus}（耗时 ${w.time}s）`;
+        // 不可建时置灰 + 写明原因（styles.css 已有 .mir:disabled 样式）。
+        // 原先按钮永不置灰，点了只弹一句 toast，玩家无法预判能否建造。
+        const done = !!G.wonders?.[G.era];
+        const busy = (G.wonderList || []).some(x=>!x.done);
+        const afford = G.faith >= w.faithCost;
+        e.wonderBtn.disabled = done || busy || !afford;
+        if(done) e.wonderBtn.title = `${w.name} 已建成（${w.bonus}）`;
+        else if(busy) e.wonderBtn.title = '已有奇迹在建，完工后才能再建';
+        else if(!afford) e.wonderBtn.title = `信仰不足：${fmtNum(Math.floor(G.faith))}/${fmtNum(w.faithCost)}（建${w.name}）`;
+        else e.wonderBtn.title = `${w.name}：${w.bonus}（耗时 ${w.time}s）`;
+      } else {
+        e.wonderBtn.disabled = true;
+        e.wonderBtn.title = '本时代没有可建造的奇迹';
       }
     }
     e.popVal.textContent = Math.floor(G.pop).toLocaleString();
@@ -368,8 +380,10 @@ export class UI {
     }
     if(e.indOut) e.indOut.textContent = `${fmtNum(indOut)}/s`;
     if(e.indNeed){
-      // 与底部进阶条的「进阶门槛（gateOf = 刚需×50%）」区分口径，避免同屏两个数字互相矛盾
-      e.indNeed.textContent = `刚需 ${fmtNum(indNeed)}/s`;
+      // 统一口径：刚需 = 建造与人口所需产能；门槛 = 刚需×50%（即 GATE(E)，与底部进阶条同一数值）。
+      // 原先只写「刚需 300/s」，而底部进阶条写「进阶门槛 150/s」，同屏两个数字互相矛盾。
+      const gate = Math.ceil(F.gateOf(E));
+      e.indNeed.textContent = `刚需 ${fmtNum(indNeed)}/s · 门槛 ${fmtNum(gate)}/s`;
       e.indNeed.classList.toggle('low', indOut < indNeed);
     }
 

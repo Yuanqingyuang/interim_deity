@@ -664,10 +664,16 @@ export function placeIndustryBatch(G, maxTiles=2){
   const rnd = autoRng(G, 3);
 
   let best = null, bestScore = -1e9;
-  const samples = 60;
+  // 半径写死会让中心环带饱和后点位恒不可行：农田允许「田-田」相邻、且按 nearRes
+  // 加成贴着居住区铺开，会很快糊满 [R_ind, R_ind+D_max]；工业又硬性要求 8 邻域全空，
+  // 于是采样点全部被否决。实测 4 个种子中有 2 个工业永久停在 9~12/s（门槛 15/s），
+  // 时代因此永久锁死。与 findAutoSite 同源修法：采样分三档逐圈外扩。
+  const samples = 96;
   for(let i=0;i<samples;i++){
+    const scale = i < samples*0.5 ? 1 : (i < samples*0.75 ? 1.7 : 2.6);
+    const Rlo = Rmin * scale, Rhi = Rmax * scale;
     const ang = rnd()*Math.PI*2;
-    const rad = Rmin + rnd()*(Rmax-Rmin);
+    const rad = Rlo + rnd()*(Rhi-Rlo);
     const x = Math.round(sx + Math.cos(ang)*rad);
     const y = Math.round(sy + Math.sin(ang)*rad);
     for(const [dx,dy] of shapes){
@@ -761,7 +767,13 @@ export function findAutoSite(G, zoneType){
     } else if(zoneType===2){
       const adjRes = countAdjRes(G, x, y);
       const nearRes = countResNear(G, x, y, 2);
-      if(nearRes < 1) score -= 6;
+      // 农田受「不得与非农田相邻」硬约束（见 canPlaceZoneAt），adjRes 恒为 0，
+      // 原先唯一正项 adjRes*5 等于失效：得分只剩 1.2 - dist*0.28 - flat*2，
+      // 中心区饱和后恒为负 → findAutoSite(2) 永久 null → 食物停在刚好够吃 →
+      // 住房被 foodOk 锁死 → 人口/时代永久停滞。
+      // 改用 2 格环内居住密度作正项，让农田能随居住区外扩持续落位。
+      score += nearRes * 2.5;
+      if(nearRes < 1) score -= 2;
       score += adjRes * 5;
       score += adjWater*1.5 + hash2(x,y,seed+2)*0.3;
     } else if(zoneType===3){
@@ -778,10 +790,11 @@ export function findAutoSite(G, zoneType){
 
     if(score > bestScore){ bestScore=score; best=[x,y]; }
   }
-  // 住房得分天然偏低（见上），只要存在几何合法的点位就应当可用；
-  // 否则中心区饱和后 findAutoSite(1) 会永久返回 null，人口停滞、无法进阶
+  // 几何合法性（t.h / canPlaceZoneAt / flat）已是硬门槛；score 只用于「在合法点位中挑最优」。
+  // 原先按 score>0.2 过滤会让远处但完全合法的点位被静默丢弃（农田尤甚），
+  // 自动建造表现为「无日志、无原因地停止」，故只要有合法候选就返回。
   if(zoneType === 1) return best;
-  return bestScore > 0.2 ? best : null;
+  return best;
 }
 
 export function placeDistrict(G, cx, cy, zoneType, maxTiles=1){
