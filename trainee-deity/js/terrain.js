@@ -1,7 +1,7 @@
 // 实习神明 · 地形系统（无边界区块）
 // 种子确定性：域扭曲 + 大陆度 + 脊状山脉 + 丘陵 + 蜿蜒河谷（适配无限区块采样）
 import { MAXH, MINH, WATER_LEVEL, TOOLS, PALETTES, fbm, valueNoise, hash2, CHUNK } from './config.js';
-import { chunkKey, worldToChunk, getTile, tileLive, eachTile, eachChunk, chunkBounds, makeTile } from './state.js';
+import { chunkKey, worldToChunk, getTile, tileLive, eachTile, eachChunk, chunkBounds, makeTile, invalidateBuiltCache } from './state.js';
 import { LAYOUT } from './formulas.js';
 
 const clamp01 = v => v < 0 ? 0 : v > 1 ? 1 : v;
@@ -233,6 +233,34 @@ export function genWorld(G){
   G.terrainDirty = true;
 }
 
+/**
+ * 统一落位入口（幂等）：同一坐标绝不写入第二座。
+ * mode: 'manual'（玩家，放宽间隔）| 'auto'（自动，走 canPlaceZoneAt）
+ * 成功返回 {x,y,zone}；失败返回 null。
+ */
+export function placeAt(G, x, y, zoneType, mode='auto'){
+  const px = x|0, py = y|0;
+  if(!(zoneType >= 1 && zoneType <= 4)) return null;
+  const t = getTile(G, px, py);
+  if(!t) return null;
+  if(t.water || t.zone > 0) return null;
+  if(t.h < 0.95 || t.h > 5.4) return null;
+  if(mode === 'manual'){
+    if(!canPlaceZoneManual(G, px, py, zoneType)) return null;
+  } else {
+    if(!canPlaceZoneAt(G, px, py, zoneType)) return null;
+  }
+  t.zone = zoneType;
+  t.prog = 0;
+  t.built = false;
+  t.tree = 0;
+  ensureChunkRing(G, px, py);
+  clearTreesNearZones(G, 1, px, py, 2);
+  G.terrainDirty = true;
+  invalidateBuiltCache(G);
+  return { x: px, y: py, zone: zoneType };
+}
+
 // ---- 工具 ----
 export function applyTool(G, hx, hy, dt){
   const tool = TOOLS[G.tool];
@@ -243,13 +271,8 @@ export function applyTool(G, hx, hy, dt){
   if(tool.kind === 'zone'){
     const tx = Math.round(hx), ty = Math.round(hy);
     if(!tileLive(G, tx, ty)) return;
-    // 手动：放宽间隔，玩家可贴着放
-    if(canPlaceZoneManual(G, tx, ty, tool.zone)){
-      const t = getTile(G, tx, ty);
-      t.zone = tool.zone; t.prog = 0; t.built = false; t.tree = 0;
-      ensureChunkRing(G, tx, ty);
-      clearTreesNearZones(G, 1, tx, ty, 2);
-      G.terrainDirty = true;
+    // 手动：放宽间隔，玩家可贴着放；一律走 placeAt 幂等
+    if(placeAt(G, tx, ty, tool.zone, 'manual')){
       G.power = Math.max(0, G.power - consume);
       if(typeof G.onZonePlaced === 'function') G.onZonePlaced(tx, ty, tool.zone);
     }
@@ -603,14 +626,14 @@ export function placeIndustryBatch(G, maxTiles=2){
   }
   if(!best) return 0;
 
+  // 工业只保留本打分路径；落位统一 placeAt（幂等）
   let placed = 0;
   const put = (x,y)=>{
     if(placed >= maxTiles) return false;
-    const t = getTile(G,x,y);
-    if(!t || t.zone>0 || t.water) return false;
     if(scoreIndustrialCell(G, x, y, resList, indList, otherList) < -1e8) return false;
-    t.zone = 3; t.prog = 0; t.built = false; t.tree = 0;
-    indList.push({x,y});
+    const r = placeAt(G, x, y, 3, 'auto');
+    if(!r) return false;
+    indList.push({x:r.x, y:r.y});
     placed++;
     return true;
   };
@@ -628,7 +651,8 @@ export function placeIndustryBatch(G, maxTiles=2){
     G.terrainDirty = true;
     ensureChunkRing(G, best.x, best.y);
   }
-  return placed;
+  // 返回真实坐标，供日志使用（禁止写 (0,0)）
+  return { n: placed, x: best.x, y: best.y };
 }
 
 export function findAutoSite(G, zoneType){
@@ -693,25 +717,9 @@ export function findAutoSite(G, zoneType){
 }
 
 export function placeDistrict(G, cx, cy, zoneType, maxTiles=1){
-  // 强制单格：所有自动生成建筑一个一个来
-  maxTiles = 1;
-  let placed = 0;
-  const tryOne = (x,y)=>{
-    if(placed>=maxTiles) return;
-    if(!canPlaceZoneAt(G, x, y, zoneType)) return;
-    const t = getTile(G, x, y);
-    t.zone = zoneType; t.prog = 0; t.built = false; t.tree = 0;
-    placed++;
-  };
-
-  tryOne(cx, cy);
-
-  if(placed){
-    G.terrainDirty = true;
-    ensureChunkRing(G, cx, cy);
-  }
-  clearTreesNearZones(G);
-  return placed;
+  // 自动单格 + 幂等 placeAt；禁止全图扫树
+  const r = placeAt(G, cx, cy, zoneType, 'auto');
+  return r ? 1 : 0;
 }
 
 export function clearTreesNearZones(G, radius=1, cx=null, cy=null, span=null){

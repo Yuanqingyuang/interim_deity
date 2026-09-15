@@ -447,14 +447,35 @@ function autoBuild(){
   const houseShort = cnt[1] < need[1] || popPress || hc <= 0;
 
   let placed = 0;
+  const thisTick = new Set();
   const names = {1:'房屋',2:'农田',3:'工业区',4:'教堂'};
+
+  const tryPlaceIndustry = ()=>{
+    if(placed >= AUTO.maxPerTick) return false;
+    // 无居住区时不狂刷工业（placeIndustryBatch 亦要求 resList 非空）
+    if(G.pop < 15) return false;
+    const res = placeIndustryBatch(G, AUTO.industryPerTick);
+    if(!res || res.n <= 0) return false;
+    placed++;
+    cnt[3] += res.n;
+    logZonePlaced(G, 3, res.x, res.y);
+    G.autoLog.unshift(`子民在郊外建起工业区（${res.n}格 @${res.x},${res.y}）`);
+    if(G.autoLog.length>6) G.autoLog.pop();
+    toast(`子民在郊外建起工业区（${res.n}格）`);
+    return true;
+  };
 
   const tryPlace = (zone)=>{
     if(placed >= AUTO.maxPerTick) return false;
+    // 工业只走 placeIndustryBatch，禁止 findAutoSite(zone=3)
+    if(zone === 3) return tryPlaceIndustry();
     const site = findAutoSite(G, zone);
     if(!site) return false;
+    const key = `${site[0]},${site[1]}`;
+    if(thisTick.has(key)) return false;
     const n = placeDistrict(G, site[0], site[1], zone, 1);
     if(!n) return false;
+    thisTick.add(key);
     placed++;
     cnt[zone] += n;
     logZonePlaced(G, zone, site[0], site[1]);
@@ -462,20 +483,6 @@ function autoBuild(){
     if(G.autoLog.length>6) G.autoLog.pop();
     toast(`子民建起一座${names[zone]}`);
     R.spawnBurst(site[0]*TILE, site[1]*TILE, ZONE_COLORS[zone], 6);
-    return true;
-  };
-
-  const tryPlaceIndustry = ()=>{
-    if(placed >= AUTO.maxPerTick) return false;
-    if(G.pop < 15) return false;
-    const n = placeIndustryBatch(G, AUTO.industryPerTick);
-    if(n <= 0) return false;
-    placed++;
-    cnt[3] += n;
-    logZonePlaced(G, 3, 0, 0);
-    G.autoLog.unshift(`子民在郊外建起工业区（${n}格）`);
-    if(G.autoLog.length>6) G.autoLog.pop();
-    toast(`子民在郊外建起工业区（${n}格）`);
     return true;
   };
 
