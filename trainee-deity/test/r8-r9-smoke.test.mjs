@@ -19,5 +19,6 @@ eachTile(G, (t)=>{
 });
 const density = trees / Math.max(1, land);
 assert(density < 0.45, `tree density ${density.toFixed(3)} < 0.45`);
+assert(land > 100, `has land ${land}`);
 
 console.log('R8/R9 smoke PASS', { land, trees, density: +density.toFixed(3) });

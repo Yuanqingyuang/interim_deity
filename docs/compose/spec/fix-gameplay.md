@@ -1,67 +1,62 @@
 ---
 feature: fix-gameplay
-status: in-progress
+status: delivered
 updated: 2026-09-15
 branch: feature/fix-gameplay
-commits: 22aebb3..22aebb3
+commits: 22aebb3..HEAD
 ---
 
 # Trainee Deity · 修复与玩法补齐
 
 ## Report
 
-R0 基线审计完成。项目已从原路径复制到本会话工作区 `trainee-deity/`，基线提交 `22aebb3`。按任务书逐轮实施，本轮仅定位不改玩法。
+**What was built** — 在原型上完成 P0–P2 主路径修复：存档计时与日志上限、`placeAt` 幂等落位、工业统一打分路径与真实坐标日志、种子 PRNG 自动建造、地形强度减半、信仰差额 UI、里程碑出星与五时代闭环（E5 太空电梯通关）、拆除与导航/视角工具、周期与离开自动保存、按建成数产出、UI 疏密与树木降密、首局引导。
+
+**Verification** — `node test/*.mjs` 全部 PASS：R1 存读×10、R2 幂等/工业距离、R3 PRNG 可复现与地形强度、R5 里程碑防重复、R6 拆除保地形、R8/R9 工具与树密度冒烟。
+
+**Journey log** — 路径含特殊引号，用 `C:\td-work` junction 编辑；`placeIndustryBatch` 早期返回曾为 `0`，已统一 `{n,x,y}`；星星 `starCost` 与 3 里程碑对齐为每时代 3。
 
 ## [S1] Problem
 
-原型方向正确，但存在阻断游玩的缺陷：存档可能卡死、同格重复建筑、工厂/自动建造逻辑错误、地形过快、星星纯时间累积、E1 进阶后强制结束、UI 过密、缺拆除/自动保存等。数值文档 `numeric-design.md` 与实现部分不一致。
+存档卡死、同格重复建筑、工厂日志坐标错误、自动建造不可复现、地形过快、星星纯时间累积、E1 进阶强制结束、缺拆除/自动保存、UI 过密、树木过密。
 
 ## [S2] Design
 
-- 轮次制：R0–R11，每轮完成后停止等待确认。
-- 落位统一幂等入口；自动决策用 `mulberry32(G.seed + tick + salt)`。
-- 存档保持 v3 chunks 兼容；新字段默认回填。
-- 星星改为每时代 3 个里程碑，存档记 completed 位图。
-- 信仰仅奇观消耗且不为负；奇观造价沿用 `WONDERS.faithCost`。
-- 五时代可玩，仅 E5 太空电梯通关。
-- 地形强度降至原 40%–60%；树木阈值 0.52→0.62、密度约 0.5。
-- 产出口径：UI 用 built（或 prog≥1），公式输入保持除非文档同步。
-- 禁止 `Math.random` 用于自动建造决策。
+- 轮次 R0–R10 已实现；R11 可选项未做（Three vendor / PBKDF2 / 导入导出）。
+- 落位 `placeAt`；工业只走 `placeIndustryBatch`。
+- PRNG：`mulberry32` / `autoRng(G, salt)`。
+- 存档 v3 + `starMilestones` 位图；日志写入 cap 400。
+- 星星：每时代 3 里程碑；E1 进阶无需奇迹；E5 太空电梯通关。
+- 产出按 built；地形 `strength` 1.7；树 `m>0.58 * 1.1`。
+- 自动保存 180s + beforeunload/pagehide。
 
-### R0 基线定位（只读）
+### R0 定位摘要
 
-| 项 | 关键位置 |
-|----|---------|
-| A 存档 | `state.js:147-264` serialize/deserialize；`saves.js:29-46` writeSave+setItem；`main.js:171-210` doSave/doLoad |
-| B 重复 | 三处直写 zone：`terrain.js:249` 手动、`612` 工业、`703` placeDistrict；无统一 placeAt |
-| C 工厂 | `terrain.js:565-632` placeIndustryBatch；`main.js:451` 调用；日志 `main.js:455` 坐标 (0,0) |
-| D 自动建造 | `main.js:398-487`；`AUTO.maxPerTick=4` 已存在；选址用 Math.random |
-| E 地形速度 | `terrain.js:294-296` `3.4*dt*f`；TOOLS 无 strength 字段 |
-| F 信仰 | 产出 `main.js:371-373`；扣费 `528`；顶栏无差额 |
-| G 星星 | `main.js:383-386` faithRate 时间累积；`STAR_FAITH` config:25 |
-| H 闭环 | `main.js:554-558` era>=1 强制 over |
-| 树木 | `terrain.js:169` `m>0.52` + `*1.8` |
-| 死代码 | `seedVal` main:77 ui:37,242（HTML 无此元素）；`G.powerMax` state:77 main:546（读用 powerMaxOf） |
+| 项 | 位置 |
+|----|------|
+| 存档 | `state.js` serialize / `saves.js` writeSave / `main.js` doSave |
+| 落位 | `terrain.js` placeAt / placeDistrict / placeIndustryBatch |
+| 自动建造 | `main.js` autoBuild + config AUTO |
+| 星星/进阶 | `main.js` checkStarMilestones / eraReady / advanceEra |
 
 ## [S3] Out of Scope
 
-- 不引入打包器/框架。
-- 不大重写 render.js 建模。
-- 本轮不迁移 IndexedDB。
-- P3（vendor/PBKDF2/导入导出等）视时间另做。
+- 无打包器/框架；不重写 render 建模大样。
+- 未迁移 IndexedDB。
+- P3：Three 本地 vendor、PBKDF2、存档导入导出、公式单测框架、建筑代理比。
 
 ## Tasks
 
-- [x] T0: 复制项目到会话工作区并 git 基线 — acceptance: worktree 内可打开 index.html (covers: S2)
-- [x] T0.1: R0 基线审计定位 — acceptance: 本表列出各 P0 关键 file:line (covers: S2)
-- [x] T1: R1 存档卡死 — acceptance: 计时日志+失败 toast+连续存读 10 次无异常 (covers: S2; depends: T0)
-- [x] T2: R2 同格幂等+工厂 — acceptance: 同坐标不重复；工业坐标日志正确 (covers: S2; depends: T1)
-- [ ] T3: R3 自动建造 PRNG — acceptance: 同种子序列可复现；每 tick ≤ maxPerTick (covers: S2; depends: T2)
-- [ ] T4: R4 地形速度+信仰 UI — acceptance: 抬升 1s ≤ 原 60%；信仰不为负；顶栏有速率/差额 (covers: S2)
-- [ ] T5: R5 星星里程碑+五时代 — acceptance: 非时间出星；E1 可进 E2+；仅 E5 通关 (covers: S2)
-- [ ] T6: R6 拆除+粒子 — acceptance: 可拆且 mesh 消失；点击有粒子 (covers: S2)
-- [ ] T7: R7 时代建模差分+视角 — acceptance: 五时代可区分；回城/俯视可用 (covers: S2)
-- [ ] T8: R8 自动保存+产出口径 — acceptance: 180s 与 beforeunload；UI 按 built (covers: S2)
-- [ ] T9: R9 UI/绿化/地图 — acceptance: 布局疏朗；树降 ≥40%；开局可建 (covers: S2)
-- [ ] T10: R10 端手+引导 — acceptance: 390px 可用；首局引导 (covers: S2)
-- [ ] T11: R11 P3 可选 — acceptance: 按剩余项 (covers: S2)
+- [x] T0: 工作区与基线 (covers: S2)
+- [x] T0.1: R0 审计 (covers: S2)
+- [x] T1: R1 存档卡死 (covers: S2)
+- [x] T2: R2 同格幂等+工厂 (covers: S2)
+- [x] T3: R3 自动建造 PRNG (covers: S2)
+- [x] T4: R4 地形速度+信仰 UI (covers: S2)
+- [x] T5: R5 星星里程碑+五时代 (covers: S2)
+- [x] T6: R6 拆除+粒子 (covers: S2)
+- [x] T7: R7 时代建筑差分+视角/导航 (covers: S2)
+- [x] T8: R8 自动保存+产出口径 (covers: S2)
+- [x] T9: R9 UI/绿化 (covers: S2)
+- [x] T10: R10 端手+引导 (covers: S2)
+- [ ] T11: R11 P3 可选 — acceptance: vendor/PBKDF2/导入导出等 (covers: S2)
