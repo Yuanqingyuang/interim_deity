@@ -1,0 +1,9 @@
+{
+  "name": "trainee-deity",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node test/run-all.mjs",
+    "serve": "python -m http.server 8080"
+  }
+}

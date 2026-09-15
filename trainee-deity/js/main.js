@@ -703,10 +703,16 @@ function placeWonder(x, y){
 
 function eraReady(){
   // R5：E1 无需奇迹；E2–E5 需本时代奇迹；E5 已是终点（通关看太空电梯）
+  // P3：另需产能/秒 ≥ GATE(E)
   if(G.era >= 4) return false;
   const needWonder = G.era >= 1;
   const wonderOk = !needWonder || !!G.wonders[G.era];
-  return G.pop >= ERAS[G.era].popGoal && wonderOk && G.stars >= ERAS[G.era].starCost;
+  if(G.pop < ERAS[G.era].popGoal) return false;
+  if(!wonderOk) return false;
+  if(G.stars < ERAS[G.era].starCost) return false;
+  ensureBuiltCache();
+  const indN = (G._builtCache && G._builtCache[3]) || 0;
+  return F.industryPerSec(indN) >= F.gateOf(G.era);
 }
 function advanceEra(){
   if(!eraReady()){ toast('进阶条件未满足'); return; }
@@ -784,8 +790,12 @@ function updateUI(){
   const flags = G.starMilestones?.[E] || [];
   const ms = list.map((m,i)=> (flags[i]?'✓':'○') + m.label.slice(0,6)).join(' ');
   const wonder = G.era===0 ? '（进阶无需奇迹）' : (G.wonders[G.era]?'奇迹✓':'奇迹✗');
+  const indN = G._builtCache?.valid ? (G._builtCache[3]||0) : 0;
+  const gate = F.gateOf(E);
+  const indOut = F.industryPerSec(indN);
+  const gateTxt = `产能${indOut.toFixed(0)}/${Math.ceil(gate)}`;
   document.getElementById('advReq').textContent =
-    `人口 ${Math.floor(G.pop)}/${ERAS[G.era].popGoal} · ${wonder} · ⭐${G.stars}/${ERAS[G.era].starCost} · ${ms}`;
+    `人口 ${Math.floor(G.pop)}/${ERAS[G.era].popGoal} · ${wonder} · ⭐${G.stars}/${ERAS[G.era].starCost} · ${gateTxt} · ${ms}`;
 }
 
 let toastTimer;

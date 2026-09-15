@@ -65,6 +65,14 @@ export function faithPerSec(churches, N){
 }
 export function industryPerSec(industries){ return industries * NUM.K_IND; }
 
+/**
+ * 时代进阶产能门槛 GATE(E) = 0.5 × 刚需工业产能/秒
+ * （numeric-design ⑥c；E1 可达标较易，E5 不用于离开时代）
+ */
+export function gateOf(E){
+  return 0.5 * industryPerSec(buildingLow(E, 3));
+}
+
 // 人口：N ← min(N_cap, N*(1+g*dt) + 0.6*dt)，且粮食须够吃
 export function growPop(N, cap, E, farms, dt){
   const g = NUM.GROWTH[Math.max(0, Math.min(4, E))];

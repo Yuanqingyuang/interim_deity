@@ -1005,12 +1005,20 @@ export class Renderer {
       t._wy = t.water ? WATER_Y : Math.max(0.3, t.h);
     });
 
-    // 建筑 / 农田
+    // 建筑 / 农田（视觉上限：超过后抽样代表格，逻辑数不变）
+    const MAX_BUILD_MESH = 420;
     const seenB = new Set();
+    let zoneCount = 0;
+    eachTile(G, (t)=>{ if(t.zone>0) zoneCount++; });
+    const step = zoneCount > MAX_BUILD_MESH ? Math.ceil(zoneCount / MAX_BUILD_MESH) : 1;
+    let zi = 0;
     eachTile(G, (t, x, y)=>{
       const key = `${x},${y}`;
       if(t.zone>0){
         seenB.add(key);
+        const idx = zi++;
+        const show = step === 1 || (idx % step === 0) || this.buildingMeshes.has(key);
+        if(!show) return;
         if(!this.buildingMeshes.has(key)){
           const m = this.makeBuilding(t, G.era);
           if(m){ this.buildingGroup.add(m); this.buildingMeshes.set(key, m); }
