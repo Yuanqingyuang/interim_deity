@@ -90,6 +90,7 @@ export const TOOLS = {
   z_agr: { cost:4, radius:1.3, kind:'zone', zone:2 },
   z_ind: { cost:4, radius:1.3, kind:'zone', zone:3 },
   z_fai: { cost:4, radius:1.3, kind:'zone', zone:4 },
+  demolish: { cost:1, radius:1.2, kind:'demolish' },
 };
 
 export const MIRACLES = {

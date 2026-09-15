@@ -3,6 +3,7 @@
 import { MAXH, MINH, WATER_LEVEL, TOOLS, PALETTES, fbm, valueNoise, hash2, CHUNK, mulberry32, autoRng } from './config.js';
 import { chunkKey, worldToChunk, getTile, tileLive, eachTile, eachChunk, chunkBounds, makeTile, invalidateBuiltCache } from './state.js';
 import { LAYOUT } from './formulas.js';
+import { logPush } from './log.js';
 
 const clamp01 = v => v < 0 ? 0 : v > 1 ? 1 : v;
 const smstep = (a, b, x) => { const t = clamp01((x - a) / (b - a)); return t * t * (3 - 2 * t); };
@@ -279,6 +280,23 @@ export function applyTool(G, hx, hy, dt){
     return;
   }
 
+  // R6 拆除：清除 zone/built/prog，保留地形
+  if(tool.kind === 'demolish'){
+    const tx = Math.round(hx), ty = Math.round(hy);
+    if(!tileLive(G, tx, ty)) return;
+    const t = getTile(G, tx, ty);
+    if(!t || t.zone <= 0) return;
+    const z = t.zone;
+    t.zone = 0; t.prog = 0; t.built = false;
+    ensureChunkRing(G, tx, ty);
+    G.terrainDirty = true;
+    invalidateBuiltCache(G);
+    G.power = Math.max(0, G.power - consume);
+    logPush(G, 90, tx, ty);
+    if(typeof G.onZonePlaced === 'function') G.onZonePlaced(tx, ty, z);
+    return;
+  }
+
   const R = tool.radius;
   const reach = R + 0.7;
   const x0 = Math.floor(hx - reach);
@@ -336,6 +354,11 @@ export function applyTool(G, hx, hy, dt){
   }
   G.power = Math.max(0, G.power - used);
   G.terrainDirty = true;
+  // R6：地形笔刷命中点粒子（由 main 注入 R，避免 terrain 依赖 render）
+  if(typeof G.onToolHit === 'function'){
+    const hx0 = Math.round(hx), hy0 = Math.round(hy);
+    G.onToolHit(hx0, hy0, G.tool);
+  }
 }
 
 export function cornerColor(h, adjWater, hRight, hDown, era=0){

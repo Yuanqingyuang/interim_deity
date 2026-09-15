@@ -106,6 +106,18 @@ function boot(){
     R.syncWorld(G);
     updateUI();
   };
+  // R6：点击/拖动命中粒子（节流，避免掉帧）
+  let _hitAcc = 0;
+  G.onToolHit = (x, y, toolKey)=>{
+    const now = performance.now();
+    if(now - _hitAcc < 80) return;
+    _hitAcc = now;
+    const col = toolKey === 'demolish' ? 0x9e9e9e
+      : toolKey === 'tree' ? 0x8bc34a
+      : toolKey === 'water' ? 0x4fc3f7
+      : 0xffe082;
+    R.spawnBurst(x * TILE, y * TILE, col, 5);
+  };
   requestAnimationFrame(loop);
 }
 
