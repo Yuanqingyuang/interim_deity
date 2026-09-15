@@ -1,6 +1,6 @@
 // 实习神明 · 地形系统（无边界区块）
 // 种子确定性：域扭曲 + 大陆度 + 脊状山脉 + 丘陵 + 蜿蜒河谷（适配无限区块采样）
-import { MAXH, MINH, WATER_LEVEL, TOOLS, PALETTES, fbm, valueNoise, hash2, CHUNK } from './config.js';
+import { MAXH, MINH, WATER_LEVEL, TOOLS, PALETTES, fbm, valueNoise, hash2, CHUNK, mulberry32, autoRng } from './config.js';
 import { chunkKey, worldToChunk, getTile, tileLive, eachTile, eachChunk, chunkBounds, makeTile, invalidateBuiltCache } from './state.js';
 import { LAYOUT } from './formulas.js';
 
@@ -314,14 +314,14 @@ export function applyTool(G, hx, hy, dt){
       if(tool.kind === 'terrain'){
         if(G.tool === 'raise'){
           if(t.water){ t.water=0; t.h = 1.0; }
-          else { t.h = Math.min(MAXH, t.h + 3.4*dt*f); }
+          else { t.h = Math.min(MAXH, t.h + (tool.strength ?? 1.7)*dt*f); }
         } else if(G.tool === 'lower'){
-          t.h = Math.max(MINH, t.h - 3.4*dt*f);
+          t.h = Math.max(MINH, t.h - (tool.strength ?? 1.7)*dt*f);
           if(t.h <= WATER_LEVEL){ t.water=1; t.tree=0; }
         } else if(G.tool === 'flatten'){
           // 羽化：中心强、边缘弱；向局部均值靠拢
           t.water = 0;
-          const pull = Math.min(1, 2.8 * dt * f * f);
+          const pull = Math.min(1, (tool.strength ?? 1.4) * dt * f * f);
           t.h = t.h + (flattenTarget - t.h) * pull;
           if(t.h < 1.08) t.h = 1.08;
           if(t.tree && f > 0.25) t.tree = 0;
@@ -588,7 +588,7 @@ function collectZoneXY(G, zone){
 export function placeIndustryBatch(G, maxTiles=2){
   maxTiles = Math.max(1, Math.min(2, maxTiles|0));
   const resList = collectZoneXY(G, 1);
-  if(!resList.length) return 0;
+  if(!resList.length) return { n: 0, x: 0, y: 0 };
   const indList = collectZoneXY(G, 3);
   const otherList = [];
   eachTile(G, (t,x,y)=>{
@@ -604,12 +604,14 @@ export function placeIndustryBatch(G, maxTiles=2){
   const Rmin = LAYOUT.R_ind;
   const Rmax = Rmin + LAYOUT.D_max;
   const shapes = maxTiles >= 2 ? [[1,0],[0,1]] : [[0,0]];
+  // R3：种子 PRNG，禁止 Math.random
+  const rnd = autoRng(G, 3);
 
   let best = null, bestScore = -1e9;
   const samples = 60;
   for(let i=0;i<samples;i++){
-    const ang = Math.random()*Math.PI*2;
-    const rad = Rmin + Math.random()*(Rmax-Rmin);
+    const ang = rnd()*Math.PI*2;
+    const rad = Rmin + rnd()*(Rmax-Rmin);
     const x = Math.round(sx + Math.cos(ang)*rad);
     const y = Math.round(sy + Math.sin(ang)*rad);
     for(const [dx,dy] of shapes){
@@ -624,7 +626,7 @@ export function placeIndustryBatch(G, maxTiles=2){
       if(s > bestScore){ bestScore = s; best = {x,y,dx,dy}; }
     }
   }
-  if(!best) return 0;
+  if(!best) return { n: 0, x: 0, y: 0 };
 
   // 工业只保留本打分路径；落位统一 placeAt（幂等）
   let placed = 0;
@@ -661,14 +663,15 @@ export function findAutoSite(G, zoneType){
   const sx = res.cx, sy = res.cy;
   const b = chunkBounds(G);
 
-  // 随机采样代替全图扫描，避免地图变大后卡死
+  // R3：种子 PRNG 采样
+  const rnd = autoRng(G, zoneType);
   const R = zoneType===3 ? 18 : 14;
   const tries = 80;
   let best=null, bestScore=-1e9;
 
   for(let i=0;i<tries;i++){
-    const x = Math.round(sx + (Math.random()*2-1)*R);
-    const y = Math.round(sy + (Math.random()*2-1)*R);
+    const x = Math.round(sx + (rnd()*2-1)*R);
+    const y = Math.round(sy + (rnd()*2-1)*R);
     if(x < b.minX || x > b.maxX || y < b.minY || y > b.maxY) continue;
     const t = getTile(G,x,y);
     if(!t || t.water || t.zone>0 || t.tree) continue;

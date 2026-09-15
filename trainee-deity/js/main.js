@@ -391,6 +391,8 @@ function tick(dt){
   G.faithRate = F.faithPerSec(churches, G.pop) * faithMult(G) * nightBonus;
   const faithGain = G.faithRate * dt;
   G.faith += faithGain; G.totalFaith += faithGain;
+  // R4：信仰禁止为负
+  if(G.faith < 0) G.faith = 0;
 
   const regen = powerRegenOf(G.faithRate);
   G.power = Math.min(powerMaxOf(G.era), G.power + regen*dt);
@@ -552,7 +554,8 @@ function placeWonder(x, y){
   const t = getTile(G, x, y);
   if(!t){ toast('这里还不能放置奇迹'); return; }
   if(t.water){ toast('不能在水面放置奇迹'); return; }
-  G.faith -= w.faithCost;
+  if(G.faith < w.faithCost){ toast(`信仰不足，需 ${w.faithCost}`); return; }
+  G.faith = Math.max(0, G.faith - w.faithCost);
   G.wonderList.push({ era, x, y, prog:0, done:false });
   G.placingWonder = false;
   ui.setWonderPlacing(false);

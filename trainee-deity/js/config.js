@@ -50,9 +50,10 @@ export const SUN_KEYS = [
 ];
 
 export const TOOLS = {
-  raise: { cost:6, radius:1.8, kind:'terrain' },
-  lower: { cost:6, radius:1.8, kind:'terrain' },
-  flatten: { cost:8, radius:2.0, kind:'terrain' },
+  // R4：强度系数 ~50%（原 3.4 → 1.7），可塑但不瞬间改天
+  raise: { cost:6, radius:1.8, kind:'terrain', strength:1.7 },
+  lower: { cost:6, radius:1.8, kind:'terrain', strength:1.7 },
+  flatten: { cost:8, radius:2.0, kind:'terrain', strength:1.4 },
   water: { cost:8, radius:1.8, kind:'terrain' },
   tree:  { cost:5, radius:1.8, kind:'terrain' },
   z_res: { cost:4, radius:1.3, kind:'zone', zone:1 },
@@ -145,6 +146,23 @@ export function hash2(x, y, seed=0){
   h = (h ^ (h>>>13)) * 1274126177 | 0;
   h = h ^ (h>>>16);
   return ((h>>>0) & 0xffffff) / 0xffffff;
+}
+
+/** 可复现 PRNG（自动建造/自动决策专用；地形生成仍用 valueNoise） */
+export function mulberry32(seed){
+  let a = seed >>> 0;
+  return function(){
+    a |= 0; a = (a + 0x6D2B79F5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+/** 自动建造决策 RNG：mulberry32(G.seed + tick + salt) */
+export function autoRng(G, salt=0){
+  const tick = Math.floor((G.time || 0) * 2);
+  return mulberry32((G.seed|0) + tick * 9973 + (salt|0));
 }
 
 function smooth(t){ return t*t*(3-2*t); }

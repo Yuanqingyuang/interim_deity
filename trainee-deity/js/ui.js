@@ -1,5 +1,5 @@
 // 实习神明 · UI
-import { ERAS, powerMaxOf } from './config.js';
+import { ERAS, powerMaxOf, WONDERS } from './config.js';
 import * as F from './formulas.js';
 import { countZone } from './state.js';
 
@@ -24,6 +24,7 @@ export class UI {
       powerRate: $('powerRate'),
       faithVal: $('faithVal'),
       faithRate: $('faithRate'),
+      faithNeed: $('faithNeed'),
       popVal: $('popVal'),
       starVal: $('starVal'),
       starProg: $('starProg'),
@@ -202,6 +203,16 @@ export class UI {
     e.powerRate.textContent = `+${(2.5+Math.min(10,G.faithRate*0.02)).toFixed(1)}/s`;
     e.faithVal.textContent = String(Math.floor(G.faith));
     e.faithRate.textContent = `+${G.faithRate.toFixed(1)}/s`;
+    // 下一奇观信仰差额（已建/在建则显示完成）
+    if(e.faithNeed){
+      const w = WONDERS[G.era];
+      if(G.wonders?.[G.era]) e.faithNeed.textContent = '已建成';
+      else if(w){
+        const gap = w.faithCost - G.faith;
+        e.faithNeed.textContent = gap <= 0 ? '可建造' : `差 ${fmtNum(Math.ceil(gap))}`;
+        e.faithNeed.classList.toggle('low', gap > 0);
+      }
+    }
     e.popVal.textContent = Math.floor(G.pop).toLocaleString();
     e.starVal.textContent = String(G.stars);
     e.starProg.textContent = `${Math.floor(G.starProg*100)}%`;
