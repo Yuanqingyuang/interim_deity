@@ -41,7 +41,19 @@ function boot(){
     return;
   }
   ui = new UI(G, {
-    onTool:(t)=>{ G.tool = t; G.placingWonder=false; G.painting=false; },
+    onTool:(t)=>{
+      if(t === 'view_home'){ R.viewHome(G); return; }
+      if(t === 'view_top'){ R.viewTop(G); return; }
+      if(t === 'navigate'){
+        G.tool = 'navigate';
+        G.placingWonder = false;
+        G.painting = false;
+        setNavMode(true);
+        return;
+      }
+      setNavMode(false);
+      G.tool = t; G.placingWonder=false; G.painting=false;
+    },
     onSpeed:(s)=>{ G.speed = s; },
     onMiracle:(k)=>castMiracle(k),
     onWonder:()=>startWonderPlacement(),
@@ -181,6 +193,20 @@ function toMenu(){
 }
 
 let _saving = false;
+
+/** 导航工具：单指/左键旋转；否则施法 */
+function setNavMode(on){
+  if(!R?.controls) return;
+  // 0=ROTATE 1=PAN 2=DOLLY_PAN — 用 THREE.MOUSE 数值：LEFT=0, MIDDLE=1, RIGHT=2
+  if(on){
+    R.controls.mouseButtons = { LEFT: 0, MIDDLE: 1, RIGHT: 2 };
+    R.controls.touches = { ONE: 0, TWO: 2 };
+  } else {
+    R.controls.mouseButtons = { LEFT: null, MIDDLE: 1, RIGHT: 0 };
+    R.controls.touches = { ONE: null, TWO: 2 };
+  }
+}
+
 function doSave(slot){
   if(!userKey){ toast('请先登录'); return; }
   if(_saving){ toast('正在保存，请稍候'); return; }
@@ -277,6 +303,28 @@ function startGame(){
   syncNpc();
   ui.refresh();
   toast(`试炼开始 · 种子 ${G.seed}。`);
+  // R10 首局引导
+  if(!localStorage.getItem('td_tutorial')){
+    setTimeout(()=>toast('① 用「居住」划一块地'), 900);
+    setTimeout(()=>toast('② 子民会自动建田/工业/教堂'), 3200);
+    setTimeout(()=>toast('③ 底部进阶条看条件，满足后可进阶'), 5600);
+    localStorage.setItem('td_tutorial', '1');
+  }
+}
+
+// R8：周期自动保存 + 离开前保存
+let _autosaveAcc = 0;
+const AUTOSAVE_SEC = 180;
+function tryAutosave(dt){
+  if(!G.started || G.over || !userKey) return;
+  _autosaveAcc += dt;
+  if(_autosaveAcc >= AUTOSAVE_SEC){
+    _autosaveAcc = 0;
+    try{
+      Saves.writeSave(userKey, 'quick', ()=>serializeState(G), {});
+      console.info('[autosave] quick ok');
+    }catch(e){ console.warn('[autosave] failed', e); }
+  }
 }
 
 function loop(now){
@@ -287,10 +335,11 @@ function loop(now){
   const gdt = dt * G.speed;
 
   if(G.started && !G.over && !G.paused){
-    if(G.painting && G.hover){
+    if(G.painting && G.hover && G.tool !== 'navigate'){
       applyTool(G, G.hover[0], G.hover[1], gdt);
     }
     tick(gdt);
+    tryAutosave(dt);
     uiAcc += dt;
     if(uiAcc > 0.12){ updateUI(); uiAcc = 0; }
   }
@@ -339,10 +388,10 @@ function tick(dt){
 
   const E = F.eraIndex(G);
   ensureBuiltCache();
-  // 产出用「已划定」数量（放建筑立即生效）；住房容量用「已建成」
+  // R8 产出口径：粮/产/信仰按「已建成」计（与 UI 一致）；住房亦按已建成
   const zc = G._zoneCache || {1:0,2:0,3:0,4:0};
   const bc = G._builtCache || {1:0,2:0,3:0,4:0};
-  const farms = zc[2]||0, inds = zc[3]||0, churches = zc[4]||0;
+  const farms = bc[2]||0, inds = bc[3]||0, churches = bc[4]||0;
   const houses = bc[1]||0;
 
   G.autoAcc += dt;
@@ -701,4 +750,14 @@ function toast(msg){
 }
 
 window.addEventListener('contextmenu', e=>e.preventDefault());
+window.addEventListener('beforeunload', ()=>{
+  if(G.started && userKey && !G.over){
+    try{ Saves.writeSave(userKey, 'quick', ()=>serializeState(G), {}); }catch(_){}
+  }
+});
+document.addEventListener('visibilitychange', ()=>{
+  if(document.visibilityState === 'hidden' && G.started && userKey){
+    try{ Saves.writeSave(userKey, 'quick', ()=>serializeState(G), {}); }catch(_){}
+  }
+});
 boot();

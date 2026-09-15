@@ -167,7 +167,7 @@ function fillTileFromNoise(t, x, y, seed){
   // 树：湿度 × 高度带
   if(!t.water && t.h > 1.2 && t.h < 6.0){
     const m = moistureAt(x, y, seed);
-    if(m > 0.52 && hash2(x, y, seed + 9) < (m - 0.52) * 1.8) t.tree = 1;
+    if(m > 0.62 && hash2(x, y, seed + 9) < (m - 0.62) * 0.9) t.tree = 1;
   }
   t.live = true;
 }

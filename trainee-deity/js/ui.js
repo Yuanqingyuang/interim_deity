@@ -217,9 +217,9 @@ export class UI {
     e.starVal.textContent = String(G.stars);
     e.starProg.textContent = `${Math.floor(G.starProg*100)}%`;
 
-    const c = G._zoneCache;
-    const farms = (c && c.valid) ? (c[2]||0) : countZone(G, 2);
-    const inds  = (c && c.valid) ? (c[3]||0) : countZone(G, 3);
+    const c = G._builtCache;
+    const farms = (c && c.valid) ? (c[2]||0) : 0;
+    const inds  = (c && c.valid) ? (c[3]||0) : 0;
     const E = F.eraIndex(G);
     const foodOut = F.foodPerSec(farms);
     const foodNeed = F.foodNeed(G.pop);

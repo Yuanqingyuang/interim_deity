@@ -1395,6 +1395,34 @@ export class Renderer {
     this.camera.updateProjectionMatrix();
     this.renderer.setSize(window.innerWidth, window.innerHeight);
   }
+
+  // R7 视角：回城 / 俯视 / 跟随居住质心
+  panCameraTo(tx, ty, dist=null, elev=null){
+    const target = new THREE.Vector3(tx, 2, ty);
+    this.controls.target.copy(target);
+    const d = dist ?? this.camera.position.distanceTo(this.controls.target);
+    const el = elev ?? 0.55;
+    const az = Math.PI * 0.35;
+    this.camera.position.set(
+      tx + Math.cos(az) * d * Math.cos(el),
+      Math.sin(el) * d + 4,
+      ty + Math.sin(az) * d * Math.cos(el)
+    );
+    this.controls.update();
+  }
+  viewHome(G){
+    // 居住质心，无居住则原点
+    let sx=0, sy=0, n=0;
+    eachTile(G, (t,x,y)=>{ if(t.zone===1){ sx+=x; sy+=y; n++; } });
+    const cx = n ? sx/n : 0, cy = n ? sy/n : 0;
+    this.panCameraTo(cx, cy, 36, 0.55);
+  }
+  viewTop(G){
+    let sx=0, sy=0, n=0;
+    eachTile(G, (t,x,y)=>{ if(t.zone===1){ sx+=x; sy+=y; n++; } });
+    const cx = n ? sx/n : 0, cy = n ? sy/n : 0;
+    this.panCameraTo(cx, cy, 48, 1.25);
+  }
 }
 
 export function cornerHeightAt(G, x, y){
