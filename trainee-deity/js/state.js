@@ -162,16 +162,21 @@ function encTile(t){
   return [h, t.water|0, t.tree|0, t.zone|0, r3(t.prog), t.built?1:0, t.variant|0];
 }
 
-export function serializeState(G){
-  const chunks = [];
-  for(const ch of G.chunks.values()){
-    chunks.push({
-      cx: ch.cx, cy: ch.cy,
-      tiles: ch.tiles.map(row => row.map(encTile))
-    });
-  }
+function encodeChunk(ch){
+  return {
+    cx: ch.cx, cy: ch.cy,
+    tiles: ch.tiles.map(row => row.map(encTile))
+  };
+}
+
+function logSliceOf(G, logCap){
   const logs = logEncode(G.logs);
-  const logSlice = logs.length > SAVE_LOG_CAP ? logs.slice(-SAVE_LOG_CAP) : logs;
+  const cap = logCap || SAVE_LOG_CAP;
+  return logs.length > cap ? logs.slice(-cap) : logs;
+}
+
+// 统一构造存档头，sync / async 两条路径必须产出完全一致的字段集
+function saveHead(G, chunks, logs){
   return {
     v: 3,
     seed: G.seed|0, era: G.era|0, speed: G.speed|0, over: G.over,
@@ -183,9 +188,41 @@ export function serializeState(G){
     wonderList: G.wonderList.map(w=>({era:w.era|0,x:w.x|0,y:w.y|0,prog:r3(w.prog),done:w.done?1:0})),
     boostGrow: r2(G.boostGrow), boostBuild: r2(G.boostBuild), boostRain: r2(G.boostRain),
     chunks,
-    logs: logSlice,
+    logs,
     savedAt: Date.now(),
   };
+}
+
+export function serializeState(G){
+  const chunks = [];
+  for(const ch of G.chunks.values()) chunks.push(encodeChunk(ch));
+  return saveHead(G, chunks, logSliceOf(G, SAVE_LOG_CAP));
+}
+
+/**
+ * #2 存档卡死：分块序列化 —— 区块编码拆成多批，批间 await 让出主线程，
+ * 避免「编码 + stringify + setItem」一次性同步执行把帧率打穿。
+ * logCap 用于配额不足时的降级重试（裁剪日志体积）。
+ */
+export async function serializeStateAsync(G, yieldFn, onProgress, logCap){
+  const yieldTo = yieldFn || (()=>new Promise(r=>setTimeout(r, 0)));
+  const list = [...G.chunks.values()];
+  const total = list.length || 1;
+  const BATCH = 8;
+  const chunks = [];
+  for(let i=0;i<list.length;i++){
+    chunks.push(encodeChunk(list[i]));
+    if((i+1) % BATCH === 0){
+      onProgress?.({ pct: Math.round((i+1) / total * 40), stage:'serialize' });
+      await yieldTo();
+    }
+  }
+  onProgress?.({ pct: 42, stage:'logs' });
+  await yieldTo();
+  const logs = logSliceOf(G, logCap);
+  onProgress?.({ pct: 48, stage:'ready' });
+  await yieldTo();
+  return saveHead(G, chunks, logs);
 }
 
 export function deserializeState(G, data){

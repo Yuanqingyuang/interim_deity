@@ -14,8 +14,8 @@ const localStorage = {
 globalThis.localStorage = localStorage;
 globalThis.performance = performance;
 
-const { serializeState, deserializeState, createState, SAVE_LOG_CAP } = await import('../js/state.js');
-const { writeSave, readSave } = await import('../js/saves.js');
+const { serializeState, serializeStateAsync, deserializeState, createState, SAVE_LOG_CAP } = await import('../js/state.js');
+const { writeSave, writeSaveAsync, readSave } = await import('../js/saves.js');
 const { logPush, logInit } = await import('../js/log.js');
 
 function assert(cond, msg){
@@ -57,7 +57,54 @@ for(let i=0;i<10;i++){
   assert(G2.chunks.size === G.chunks.size, `chunk count #${i+1}`);
 }
 
-// 失败路径：setItem 抛错
+// === #2 异步分块写档 ===
+// 1) 正常路径：异步写档与同步路径同构，往返一致，且无需裁剪
+const prog = [];
+const metaA = await writeSaveAsync('tester', 'quick',
+  (logCap, yieldFn, onProgress)=>serializeStateAsync(G, yieldFn, onProgress, logCap),
+  {}, { onProgress: p=>prog.push(p.pct) });
+assert(metaA, 'writeSaveAsync returns meta');
+assert(metaA._stats.trimTry === 0, `async first try no trim got ${metaA._stats && metaA._stats.trimTry}`);
+const bA = readSave('tester', 'quick');
+assert(bA, 'async body readable');
+const G3 = createState(0);
+assert(deserializeState(G3, bA), 'async body deserializable');
+assert(Math.abs(G3.pop - 150) < 0.11, `async pop roundtrip got ${G3.pop}`);
+assert(G3.chunks.size === G.chunks.size, 'async chunk count matches');
+assert(prog.length >= 2 && prog[prog.length-1] === 100, `progress reported ${prog.join('/')}`);
+
+// 异步体必须与同步体同构（字段集/区块数/日志数一致），否则读档会错位
+const bodyAsync = await serializeStateAsync(G);
+const bodySync = serializeState(G);
+assert(Object.keys(bodyAsync).length === Object.keys(bodySync).length, 'async/sync body same key count');
+assert(bodyAsync.chunks.length === bodySync.chunks.length, 'async/sync same chunk count');
+assert(bodyAsync.logs.length === bodySync.logs.length, 'async/sync same log count');
+
+// 2) 降级重试：前两次 setItem 失败（配额），第 3 次成功 ⇒ trimTry>0 且日志被裁剪
+let setCalls = 0;
+const origSet = localStorage.setItem;
+localStorage.setItem = function(k, v){
+  setCalls++;
+  if(setCalls <= 2) throw new Error('QuotaExceededError');
+  return origSet.call(localStorage, k, v);
+};
+const metaTrim = await writeSaveAsync('tester', 'slot3',
+  (logCap, yieldFn, onProgress)=>serializeStateAsync(G, yieldFn, onProgress, logCap), {});
+localStorage.setItem = origSet;
+assert(metaTrim, 'degrade retry eventually succeeds');
+assert(metaTrim._stats.trimTry === 1, `trimTry=1 got ${metaTrim._stats && metaTrim._stats.trimTry}`);
+assert(metaTrim._stats.logs <= 120, `logs trimmed <=120 got ${metaTrim._stats.logs}`);
+
+// 3) 最新写入者获胜：异步写档进行中若出现更晚的同步写入，前者必须放弃提交
+const pSuperseded = writeSaveAsync('tester', 'slot2',
+  (logCap, yieldFn, onProgress)=>serializeStateAsync(G, yieldFn, onProgress, logCap), {});
+const syncMeta = writeSave('tester', 'slot2', () => serializeState(G), {});
+assert(syncMeta, 'interleaved sync write ok');
+const superseded = await pSuperseded;
+assert(superseded === null, 'superseded async write abandoned (returns null)');
+assert(readSave('tester', 'slot2'), 'slot2 still holds sync-written body');
+
+// 失败路径：setItem 抛错（commitSave 回收重试后仍失败 ⇒ null）
 const orig = localStorage.setItem;
 localStorage.setItem = () => { throw new Error('QuotaExceededError'); };
 const fail = writeSave('tester', 'slot1', () => serializeState(G), {});

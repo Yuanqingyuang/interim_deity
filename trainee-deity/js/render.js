@@ -1095,51 +1095,55 @@ export class Renderer {
   }
 
   syncWorld(G){
-    eachTile(G, (t, x, y)=>{
-      t._wx = x*TILE; t._wz = y*TILE;
-      // 建筑/树用邻域平均高，减少坡地穿模
-      t._wy = t.water ? WATER_Y : this._surfaceY(G, x, y);
-    });
-
     // 建筑 / 农田（视觉上限：超过后抽样代表格，逻辑数不变）
     const MAX_BUILD_MESH = 420;
-    const seenB = new Set();
+    // #25 性能：抽样步长依赖「划定总数」，优先取划定缓存，避免为它再全图扫一趟
     let zoneCount = 0;
-    eachTile(G, (t)=>{ if(t.zone>0) zoneCount++; });
+    const zc = G._zoneCache;
+    if(zc && zc.valid){
+      zoneCount = (zc[1]||0)+(zc[2]||0)+(zc[3]||0)+(zc[4]||0);
+    } else {
+      eachTile(G, (t)=>{ if(t.zone>0) zoneCount++; });
+    }
     const step = zoneCount > MAX_BUILD_MESH ? Math.ceil(zoneCount / MAX_BUILD_MESH) : 1;
     let zi = 0;
+    const seenB = new Set();
+    const seenT = new Set();
+
+    // #25 性能：原「坐标预计算 / 建筑 / 树」共 4 趟全图遍历合并为 1 趟；
+    // _wy 需 5 次 getTile 求邻域均值，只在真正要摆网格（有划定或长树）的格上计算，
+    // 其余格（水面、空地）跳过——它们不再被任何渲染/逻辑消费。
     eachTile(G, (t, x, y)=>{
-      const key = `${x},${y}`;
-      if(t.zone>0){
+      t._wx = x*TILE; t._wz = y*TILE;
+      const isZone = t.zone > 0;
+      const isTree = !!t.tree && !t.water && t.h > WATER_Y + 0.15;
+      if(!isZone && !isTree) return;
+      t._wy = t.water ? WATER_Y : this._surfaceY(G, x, y);
+
+      if(isZone){
+        const key = `${x},${y}`;
         seenB.add(key);
         const idx = zi++;
         const show = step === 1 || (idx % step === 0) || this.buildingMeshes.has(key);
-        if(!show) return;
-        if(!this.buildingMeshes.has(key)){
-          const m = this.makeBuilding(t, G.era);
-          if(m){ this.buildingGroup.add(m); this.buildingMeshes.set(key, m); }
-        }
-        const m = this.buildingMeshes.get(key);
-        if(m){
-          // 底面略埋入地表 0.02，避免缝隙；高度用邻域均值
-          m.position.set(t._wx, t._wy - 0.02, t._wz);
-          m.visible = true;
-          const prog = t.built ? 1 : Math.max(0.15, t.prog);
-          const zs = ZONES[t.zone];
-          m.scale.setScalar(zs.noBuilding ? (0.55+prog*0.45) : (0.35 + prog*0.65));
+        if(show){
+          if(!this.buildingMeshes.has(key)){
+            const m = this.makeBuilding(t, G.era);
+            if(m){ this.buildingGroup.add(m); this.buildingMeshes.set(key, m); }
+          }
+          const m = this.buildingMeshes.get(key);
+          if(m){
+            // 底面略埋入地表 0.02，避免缝隙；高度用邻域均值
+            m.position.set(t._wx, t._wy - 0.02, t._wz);
+            m.visible = true;
+            const prog = t.built ? 1 : Math.max(0.15, t.prog);
+            const zs = ZONES[t.zone];
+            m.scale.setScalar(zs.noBuilding ? (0.55+prog*0.45) : (0.35 + prog*0.65));
+          }
         }
       }
-    });
-    for(const [key, m] of this.buildingMeshes){
-      if(!seenB.has(key)){ this.buildingGroup.remove(m); this.buildingMeshes.delete(key); }
-    }
 
-    // 树
-    const seenT = new Set();
-    eachTile(G, (t, x, y)=>{
-      const key = `${x},${y}`;
-      // 水面/极浅滩不长树
-      if(t.tree && !t.water && t.h > WATER_Y + 0.15){
+      if(isTree){
+        const key = `${x},${y}`;
         seenT.add(key);
         if(!this.treeMeshes.has(key)){
           const m = this.makeTree(t.h, G.era, t.variant);
@@ -1149,6 +1153,10 @@ export class Renderer {
         if(m) m.position.set(t._wx, t._wy - 0.05, t._wz);
       }
     });
+
+    for(const [key, m] of this.buildingMeshes){
+      if(!seenB.has(key)){ this.buildingGroup.remove(m); this.buildingMeshes.delete(key); }
+    }
     for(const [key, m] of this.treeMeshes){
       if(!seenT.has(key)){ this.treeGroup.remove(m); this.treeMeshes.delete(key); }
     }
@@ -1454,12 +1462,17 @@ export class Renderer {
     return grp;
   }
 
-  setHover(x, y, G){
-    if(x==null){ this.hoverMesh.visible=false; return; }
+  // #24 style: 'ok' 可放置（金）| 'bad' 不可放置（红）| 'demolish' 可拆除（橙）| 'none' 隐藏
+  setHover(x, y, G, style){
+    if(x==null || style === 'none'){ this.hoverMesh.visible=false; return; }
     const t = getTile(G, x, y);
     if(!t){ this.hoverMesh.visible=false; return; }
     const h = t.water ? WATER_Y : Math.max(0.3, t.h);
     this.hoverMesh.position.set(x*TILE, h+0.06, y*TILE);
+    const m = this.hoverMesh.material;
+    if(style === 'bad'){ m.color.setHex(0xff5252); m.opacity = 0.95; }
+    else if(style === 'demolish'){ m.color.setHex(0xff8a65); m.opacity = 0.90; }
+    else { m.color.setHex(0xffd54f); m.opacity = 0.85; }
     this.hoverMesh.visible = true;
   }
 

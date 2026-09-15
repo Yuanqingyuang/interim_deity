@@ -19,8 +19,12 @@
 }
 *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent;}
 html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--txt);font-family:"PingFang SC","Microsoft YaHei","Helvetica Neue",system-ui,sans-serif;user-select:none;}
-#gameCanvas{display:block;position:fixed;inset:0;width:100%;height:100%;touch-action:none;cursor:grab;}
-#gameCanvas:active{cursor:grabbing;}
+#gameCanvas{display:block;position:fixed;inset:0;width:100%;height:100%;touch-action:none;cursor:default;}
+/* #24 光标反馈：按当前工具切换，笔刷态用十字准星，拆除态用 cell，镜头态保持抓取 */
+body.cur-paint #gameCanvas{cursor:crosshair;}
+body.cur-demolish #gameCanvas{cursor:cell;}
+body.cur-cam #gameCanvas{cursor:grab;}
+body.cur-cam #gameCanvas:active{cursor:grabbing;}
 
 .hidden{display:none !important;}
 .overlay{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:radial-gradient(circle at 50% 35%,rgba(40,30,20,.55),rgba(8,10,14,.92));z-index:50;backdrop-filter:blur(6px);}

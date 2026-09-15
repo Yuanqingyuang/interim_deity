@@ -1,9 +1,10 @@
 // 实习神明 · 主循环
 import { TILE, MIRACLES, WONDERS, ERAS, AUTO, TOOLS, MILESTONES, ZONES,
   powerMaxOf, powerRegenOf, faithCapOf, sampleSun } from './config.js';
-import { createState, housingCap, faithMult, serializeState, deserializeState,
+import { createState, housingCap, faithMult, serializeState, serializeStateAsync, deserializeState,
   refreshBuiltCache, invalidateBuiltCache, getTile, eachTile } from './state.js';
-import { genWorld, applyTool, findAutoSite, placeDistrict, placeIndustryBatch, clearTreesNearZones, ensureChunkRing } from './terrain.js';
+import { genWorld, applyTool, findAutoSite, placeDistrict, placeIndustryBatch, clearTreesNearZones, ensureChunkRing,
+  canPlaceZoneManual } from './terrain.js';
 import * as F from './formulas.js';
 import { Renderer } from './render.js';
 import { UI } from './ui.js';
@@ -59,11 +60,15 @@ function boot(){
           setCamMode(t === 'cam_rot' ? 'rotate' : 'pan');
           ui?.syncToolActive?.(t);
         }
+        updateCursor();
+        refreshHover();
         return;
       }
       if(G.tool === 'cam_rot' || G.tool === 'cam_pan') G._lastPaintTool = t;
       setCamMode('none');
       G.tool = t; G.placingWonder=false; G.painting=false;
+      updateCursor();
+      refreshHover();
     },
     onSpeed:(s)=>{ G.speed = s; },
     onMiracle:(k)=>castMiracle(k),
@@ -161,6 +166,7 @@ function boot(){
       : 0xffe082;
     R.spawnBurst(x * TILE, y * TILE, col, 5);
   };
+  updateCursor();
   requestAnimationFrame(loop);
 }
 
@@ -204,11 +210,13 @@ function openPause(){
   if(!G.started) return;
   G.paused = true;
   G.painting = false;
+  updateCursor();
   ui.showScreen('pause');
 }
 
 function closePause(){
   G.paused = false;
+  updateCursor();
   ui.hideAllScreens();
 }
 
@@ -230,29 +238,34 @@ function setCamMode(mode){
   R?.setCamMode?.(mode);
 }
 
-function doSave(slot){
+/** #2 存档卡死：异步分块写档 + 阶段进度提示；失败给出可见错误 */
+async function doSave(slot){
   if(!userKey){ toast('请先登录'); return; }
   if(_saving){ toast('正在保存，请稍候'); return; }
   _saving = true;
-  toast('保存中…');
-  // 先让「保存中…」画出一帧，再跑同步 stringify/setItem，避免体感卡死
-  requestAnimationFrame(()=>{
-    try{
-      const meta = Saves.writeSave(userKey, slot, ()=>serializeState(G), {});
-      if(meta){
-        logPush(G, 80, 0, 0);
-        const s = meta._stats;
-        toast(s
-          ? `已保存 · ${s.totalMs}ms · ${s.kb}KB`
-          : `已保存 · ${Saves.SLOT_LABEL[slot]}`);
-      } else toast('保存失败');
-    }catch(e){
-      console.error('[save] doSave failed', e);
-      toast('保存失败');
-    }finally{
-      _saving = false;
+  toast('保存中… 0%');
+  try{
+    const meta = await Saves.writeSaveAsync(
+      userKey, slot,
+      (logCap, yieldFn, onProgress)=>serializeStateAsync(G, yieldFn, onProgress, logCap),
+      {},
+      { onProgress: p=>toast(`保存中… ${p.pct}%`) },
+    );
+    if(meta){
+      logPush(G, 80, 0, 0);
+      const s = meta._stats;
+      const trim = s.trimTry > 0 ? ` · 日志裁剪至${s.logs}条` : '';
+      toast(`已保存 · ${s.totalMs}ms · ${s.kb}KB${trim}`);
+    } else {
+      // 序列化/配额全失败：必须让玩家看见，否则会以为存上了
+      toast('保存失败：存储空间不足，请删除旧存档或导出后清理浏览器数据');
     }
-  });
+  }catch(e){
+    console.error('[save] doSave failed', e);
+    toast('保存失败');
+  }finally{
+    _saving = false;
+  }
 }
 
 function doLoad(slot){
@@ -278,6 +291,7 @@ function doLoad(slot){
   syncNpc();
   ui.hideAllScreens();
   updateUI();
+  updateCursor();
   console.info('[load]', slot, { ms: +(tLoad - t0).toFixed(1), chunks: G.chunks.size });
   toast('已读取存档');
 }
@@ -325,6 +339,7 @@ function startGame(){
   logPush(G, 60, 0, 0);
   syncNpc();
   ui.refresh();
+  updateCursor();
   toast(`试炼开始 · 种子 ${G.seed}。`);
   // R10 首局引导
   if(!localStorage.getItem('td_tutorial')){
@@ -338,24 +353,33 @@ function startGame(){
 // R8：周期自动保存 + 离开前保存
 let _autosaveAcc = 0;
 let _autosaveWarned = false;
+let _autosaveBusy = false;
 const AUTOSAVE_SEC = 180;
+// #2 存档卡死：自动存档改走异步分块路径，不再在 tick 里同步 stringify/setItem 卡帧
 function tryAutosave(dt){
   if(!G.started || G.over || !userKey) return;
+  if(_autosaveBusy || _saving) return;
   _autosaveAcc += dt;
-  if(_autosaveAcc >= AUTOSAVE_SEC){
-    _autosaveAcc = 0;
-    // writeSave 配额/序列化失败时返回 null，必须检查：静默失败会让玩家以为一直在自动存档
-    let ok = false;
-    try{ ok = !!Saves.writeSave(userKey, 'quick', ()=>serializeState(G), {}); }
-    catch(e){ console.warn('[autosave] failed', e); }
-    if(!ok){
-      console.warn('[autosave] quick FAILED (quota / serialize)');
-      if(!_autosaveWarned){
-        _autosaveWarned = true;
-        toast('自动存档失败，请手动保存或导出存档');
-      }
+  if(_autosaveAcc < AUTOSAVE_SEC) return;
+  _autosaveAcc = 0;
+  _autosaveBusy = true;
+  // 写档失败返回 null，必须检查：静默失败会让玩家以为一直在自动存档
+  Saves.writeSaveAsync(
+    userKey, 'quick',
+    (logCap, yieldFn, onProgress)=>serializeStateAsync(G, yieldFn, onProgress, logCap),
+    {},
+  ).then(meta=>{
+    if(meta) return;
+    console.warn('[autosave] quick FAILED (quota / serialize)');
+    if(!_autosaveWarned){
+      _autosaveWarned = true;
+      toast('自动存档失败，请手动保存或导出存档');
     }
-  }
+  }).catch(e=>{
+    console.warn('[autosave] failed', e);
+  }).finally(()=>{
+    _autosaveBusy = false;
+  });
 }
 
 function loop(now){
@@ -492,8 +516,11 @@ function tick(dt){
       still.push(p);
     }
   }
-  if(!buildChanged) G._pendingTiles = still;
-  else G._pendingTiles = still;
+  // #25 性能：still 已是权威待建列表（已剔除刚建成者），
+  // 无需再依赖 _pendingValid=false 在下一帧全图重建；
+  // 真正新增划定（autoBuild / 手动放置）会各自 invalidate，届时重建即可。
+  G._pendingTiles = still;
+  G._pendingValid = true;
   if(buildChanged){
     refreshBuiltCache(G);
     R.syncWorld(G);
@@ -584,8 +611,10 @@ const ZONE_COLORS = {
 // ---- 自动建造：粮/产能有余建房，教堂跟上公式目标 ----
 function autoBuild(){
   const E = F.eraIndex(G);
-  const cnt = {1:0,2:0,3:0,4:0};
-  eachTile(G, (t)=>{ if(t.zone>0) cnt[t.zone]++; });
+  // #25 性能：划定数直接取缓存（refreshBuiltCache 同趟产出 _zoneCache），不再全图扫
+  ensureBuiltCache();
+  const zcA = G._zoneCache || {1:0,2:0,3:0,4:0};
+  const cnt = {1: zcA[1]||0, 2: zcA[2]||0, 3: zcA[3]||0, 4: zcA[4]||0 };
 
   // 公式目标（low = 刚需）
   const need = {};
@@ -596,14 +625,15 @@ function autoBuild(){
   }
 
   // R-review：供需与 tick 一致，按「已建成」计
-  ensureBuiltCache();
   const bcA = G._builtCache || {1:0,2:0,3:0,4:0};
   const farmsBuilt = bcA[2]||0, indsBuilt = bcA[3]||0;
   const foodOut = F.foodPerSec(farmsBuilt);
   const foodNeed = F.foodNeed(G.pop);
   const indOut = F.industryPerSec(indsBuilt);
-  let pending = 0;
-  eachTile(G, (t)=>{ if(t.zone>0 && !t.built) pending++; });
+  // #25 性能：待建 = 划定 − 建成（与 tick 的 zSum−bSum 同口径），不再全图扫
+  const zSumA = (cnt[1]||0)+(cnt[2]||0)+(cnt[3]||0)+(cnt[4]||0);
+  const bSumA = (bcA[1]||0)+(bcA[2]||0)+(bcA[3]||0)+(bcA[4]||0);
+  const pending = Math.max(0, zSumA - bSumA);
   const buildDemand = pending * F.NUM.C0 * Math.pow(1.5, E);
 
   // 粮食有余：能养活当前人口，且再养 4 人（一栋房）仍够
@@ -731,6 +761,8 @@ function startWonderPlacement(){
   if(G.faith < w.faithCost){ toast(`信仰不足，需 ${w.faithCost}`); return; }
   G.placingWonder = true;
   ui.setWonderPlacing(true);
+  updateCursor();
+  refreshHover();
   toast(`选择地块放置「${w.name}」（消耗信仰 ${w.faithCost}）`);
 }
 
@@ -747,6 +779,8 @@ function placeWonder(x, y){
   G.wonderList.push({ era, x, y, prog:0, done:false });
   G.placingWonder = false;
   ui.setWonderPlacing(false);
+  updateCursor();
+  refreshHover();
   R.syncWorld(G);
   toast(`开始建造「${w.name}」`);
 }
@@ -821,12 +855,52 @@ function handleDown(px, py, button){
   applyTool(G, cell[0], cell[1], 0.05);
 }
 
+// #24：光标随工具切换（笔刷 / 拆除 / 镜头）
+function updateCursor(){
+  const b = document.body;
+  if(!b) return;
+  const t = G.tool;
+  const cam = G.paused || t === 'cam_rot' || t === 'cam_pan';
+  const cls = cam ? 'cur-cam' : (t === 'demolish' ? 'cur-demolish' : 'cur-paint');
+  if(b.classList.contains(cls)) return;
+  b.classList.remove('cur-paint','cur-cam','cur-demolish');
+  b.classList.add(cls);
+}
+
+// #24：当前悬停格的合法性 → 悬停环配色
+function hoverStyle(x, y){
+  const t = getTile(G, x, y);
+  if(!t) return 'none';
+  if(G.placingWonder){
+    if(t.water || t.zone > 0 || t.h < 1.0 || t.h > 5.5) return 'bad';
+    return 'ok';
+  }
+  const tool = TOOLS[G.tool];
+  if(!tool) return 'none';
+  if(tool.kind === 'demolish') return (!t.water && t.zone > 0) ? 'demolish' : 'bad';
+  if(tool.kind === 'zone') return canPlaceZoneManual(G, x, y, tool.zone) ? 'ok' : 'bad';
+  switch(G.tool){
+    case 'raise':
+    case 'lower':
+    case 'flatten': return 'ok';
+    case 'water': return (!t.water && t.h < 2.8) ? 'ok' : 'bad';
+    case 'tree': return (!t.water && t.h > 0.9 && t.h < 6.2) ? 'ok' : 'bad';
+    default: return 'ok';
+  }
+}
+
 function handleMove(px, py){
   if(!G.started) return;
   const cell = screenToTile(px, py);
   if(!cell){ R.setHover(null,G); return; }
   G.hover = cell;
-  R.setHover(cell[0], cell[1], G);
+  R.setHover(cell[0], cell[1], G, hoverStyle(cell[0], cell[1]));
+}
+
+// #24：工具/奇迹态切换后立即刷新悬停环配色，不必等下一次鼠标移动
+function refreshHover(){
+  if(!G.hover) return;
+  R.setHover(G.hover[0], G.hover[1], G, hoverStyle(G.hover[0], G.hover[1]));
 }
 
 function updateUI(){
@@ -878,6 +952,8 @@ function toast(msg){
 }
 
 window.addEventListener('contextmenu', e=>e.preventDefault());
+// 离场/后台保存必须当场写完，无法 await ⇒ 保留同步 writeSave；
+// 它会 bump 槽位序号，使在飞的异步写档自动放弃提交（最新者获胜）
 window.addEventListener('beforeunload', ()=>{
   if(G.started && userKey && !G.over){
     try{ if(!Saves.writeSave(userKey, 'quick', ()=>serializeState(G), {})) console.warn('[save] 离场保存失败'); }
