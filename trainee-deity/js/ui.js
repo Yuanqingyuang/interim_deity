@@ -43,9 +43,15 @@ export class UI {
   bind(){
     document.querySelectorAll('.tool').forEach(b=>{
       b.addEventListener('click', ()=>{
+        // 视角旋转/移动视角由 main 决定是否保持 active（可开关）
+        const key = b.dataset.tool;
+        if(key === 'cam_rot' || key === 'cam_pan'){
+          this.h.onTool(key);
+          return;
+        }
         document.querySelectorAll('.tool').forEach(x=>x.classList.remove('active'));
         b.classList.add('active');
-        this.h.onTool(b.dataset.tool);
+        this.h.onTool(key);
       });
     });
     document.querySelectorAll('.spd').forEach(b=>{
@@ -179,6 +185,15 @@ export class UI {
     cv.addEventListener('auxclick', e=>e.preventDefault());
     // 中键自动滚动（Windows）
     cv.addEventListener('mousedown', e=>{ if(e.button===1) e.preventDefault(); }, { passive: false });
+  }
+
+  /** 同步工具栏 active（含视角开关） */
+  syncToolActive(tool){
+    document.querySelectorAll('.tool').forEach(x=>{
+      const k = x.dataset.tool;
+      if(!k) return;
+      x.classList.toggle('active', k === tool);
+    });
   }
 
   setWonderPlacing(on){

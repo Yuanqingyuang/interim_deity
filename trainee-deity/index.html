@@ -44,7 +44,7 @@
       <button id="newGameBtn" class="btn-primary">新 游 戏</button>
       <button id="loadMenuBtn" class="btn-secondary">读 取 存 档</button>
       <button id="logoutBtn" class="btn-secondary">退出登录</button>
-      <p class="hint">左键：施加工具 · 右键拖动：旋转 · 中键：平移 · 滚轮：缩放 · WASD/QE：镜头 · Shift+右键：平移<br/>地图由随机种子生成，可用 URL <code>?seed=123</code> 分享同一世界</p>
+      <p class="hint">左键：工具 · 右键：旋转 · 中键/Shift+右键：平移 · 滚轮：缩放 · WASD 平移 · Q/E 旋转 · 「视角旋转/移动视角」可开关<br/>地图由随机种子生成，可用 URL <code>?seed=123</code> 分享同一世界</p>
     </div>
   </div>
 
@@ -89,7 +89,7 @@
       <p class="subtitle">蛮荒时代 · 毕业试炼</p>
       <p class="desc">从无边大地开始：塑造地形、日照流转，子民会按需求自动建造。引导文明从茹毛饮血走向星辰大海。</p>
       <button id="startBtn" class="btn-primary">开 始 试 炼</button>
-      <p class="hint">左键：施加工具 · 右键拖动：旋转 · 中键：平移 · 滚轮：缩放 · WASD/QE：镜头 · Shift+右键：平移<br/>地图由随机种子生成，可用 URL <code>?seed=123</code> 分享同一世界</p>
+      <p class="hint">左键：工具 · 右键：旋转 · 中键/Shift+右键：平移 · 滚轮：缩放 · WASD 平移 · Q/E 旋转 · 「视角旋转/移动视角」可开关<br/>地图由随机种子生成，可用 URL <code>?seed=123</code> 分享同一世界</p>
     </div>
   </div>
 
@@ -170,9 +170,10 @@
     </div>
     <div class="tool-group" data-group="操作">
       <button class="tool" data-tool="demolish"><span class="t-ico">🔨</span>拆除<span class="cost">⚡1/s</span></button>
-      <button class="tool" data-tool="navigate"><span class="t-ico">🧭</span>导航<span class="cost">触控旋转</span></button>
     </div>
     <div class="tool-group" data-group="视角">
+      <button class="tool" data-tool="cam_rot" title="左键拖动旋转；再点关闭"><span class="t-ico">🧭</span>视角旋转</button>
+      <button class="tool" data-tool="cam_pan" title="左键拖动平移；再点关闭"><span class="t-ico">✋</span>移动视角</button>
       <button class="tool" data-tool="view_home"><span class="t-ico">🏠</span>回城</button>
       <button class="tool" data-tool="view_top"><span class="t-ico">🗺️</span>俯视</button>
     </div>

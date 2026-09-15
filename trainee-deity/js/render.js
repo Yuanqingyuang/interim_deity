@@ -80,7 +80,7 @@ export class Renderer {
       RIGHT: THREE.MOUSE.ROTATE
     };
     this.controls.enablePan = true;
-    this._navMode = false;
+    this._camMode = 'none'; // none | rotate | pan
     this._keys = { w:false, a:false, s:false, d:false, q:false, e:false, shift:false };
     this._bindCameraKeys(canvas);
 
@@ -1457,6 +1457,9 @@ export class Renderer {
     });
     // Shift + 右键 = 平移（OrbitControls 用 RIGHT=PAN 临时切换）
     let shiftRmb = false;
+    const applyRight = ()=>{
+      this.controls.mouseButtons.RIGHT = THREE.MOUSE.ROTATE;
+    };
     canvas.addEventListener('pointerdown', (e)=>{
       if(e.button === 2 && e.shiftKey){
         shiftRmb = true;
@@ -1466,7 +1469,7 @@ export class Renderer {
     window.addEventListener('pointerup', (e)=>{
       if(shiftRmb && e.button === 2){
         shiftRmb = false;
-        this.controls.mouseButtons.RIGHT = this._navMode ? THREE.MOUSE.ROTATE : THREE.MOUSE.ROTATE;
+        applyRight();
       }
     });
   }
@@ -1507,26 +1510,30 @@ export class Renderer {
     this.controls.update();
   }
 
-  /** 导航工具：左键旋转；普通工具：左键留给施法 */
-  setNavMode(on){
-    this._navMode = !!on;
+  /**
+   * 方案 A（天际线式）：
+   * - 左键：施法；cam_rot=旋转 / cam_pan=平移
+   * - 右键：旋转（Shift+右键=平移）
+   * - 中键：平移；滚轮：缩放；WASD/QE 键盘
+   */
+  setCamMode(mode){
+    const m = mode === 'rotate' || mode === 'pan' ? mode : 'none';
+    this._camMode = m;
     if(!this.controls) return;
-    if(on){
-      this.controls.mouseButtons = {
-        LEFT: THREE.MOUSE.ROTATE,
-        MIDDLE: THREE.MOUSE.PAN,
-        RIGHT: THREE.MOUSE.ROTATE
-      };
-      this.controls.touches = { ONE: THREE.TOUCH.ROTATE, TWO: THREE.TOUCH.DOLLY_PAN };
-    } else {
-      this.controls.mouseButtons = {
-        LEFT: null,
-        MIDDLE: THREE.MOUSE.PAN,
-        RIGHT: THREE.MOUSE.ROTATE
-      };
-      this.controls.touches = { ONE: null, TWO: THREE.TOUCH.DOLLY_PAN };
-    }
+    const LEFT = m === 'rotate' ? THREE.MOUSE.ROTATE
+      : m === 'pan' ? THREE.MOUSE.PAN
+      : null;
+    this.controls.mouseButtons = {
+      LEFT,
+      MIDDLE: THREE.MOUSE.PAN,
+      RIGHT: THREE.MOUSE.ROTATE
+    };
+    const ONE = m === 'rotate' ? THREE.TOUCH.ROTATE
+      : m === 'pan' ? THREE.TOUCH.PAN
+      : null;
+    this.controls.touches = { ONE, TWO: THREE.TOUCH.DOLLY_PAN };
   }
+  getCamMode(){ return this._camMode; }
 
   // R7 视角：回城 / 俯视 / 跟随居住质心
   panCameraTo(tx, ty, dist=null, elev=null){

@@ -44,14 +44,25 @@ function boot(){
     onTool:(t)=>{
       if(t === 'view_home'){ R.viewHome(G); return; }
       if(t === 'view_top'){ R.viewTop(G); return; }
-      if(t === 'navigate'){
-        G.tool = 'navigate';
-        G.placingWonder = false;
-        G.painting = false;
-        setNavMode(true);
+      // 方案 A：视角旋转 / 移动视角 — 再点一次关闭
+      if(t === 'cam_rot' || t === 'cam_pan'){
+        const already = G.tool === t;
+        if(already){
+          G.tool = G._lastPaintTool || 'raise';
+          setCamMode('none');
+          ui?.syncToolActive?.(G.tool);
+        } else {
+          if(G.tool !== 'cam_rot' && G.tool !== 'cam_pan') G._lastPaintTool = G.tool;
+          G.tool = t;
+          G.placingWonder = false;
+          G.painting = false;
+          setCamMode(t === 'cam_rot' ? 'rotate' : 'pan');
+          ui?.syncToolActive?.(t);
+        }
         return;
       }
-      setNavMode(false);
+      if(G.tool === 'cam_rot' || G.tool === 'cam_pan') G._lastPaintTool = t;
+      setCamMode('none');
       G.tool = t; G.placingWonder=false; G.painting=false;
     },
     onSpeed:(s)=>{ G.speed = s; },
@@ -214,9 +225,9 @@ function toMenu(){
 
 let _saving = false;
 
-/** 导航工具：左键旋转；普通工具左键施法（右键旋转/中键平移始终可用） */
-function setNavMode(on){
-  R?.setNavMode?.(on);
+/** 方案 A：none | rotate | pan */
+function setCamMode(mode){
+  R?.setCamMode?.(mode);
 }
 
 function doSave(slot){
@@ -347,7 +358,8 @@ function loop(now){
   const gdt = dt * G.speed;
 
   if(G.started && !G.over && !G.paused){
-    if(G.painting && G.hover && G.tool !== 'navigate'){
+    const camTool = G.tool === 'cam_rot' || G.tool === 'cam_pan';
+    if(G.painting && G.hover && !camTool){
       applyTool(G, G.hover[0], G.hover[1], gdt);
     }
     tick(gdt);
