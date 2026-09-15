@@ -167,8 +167,8 @@ function fillTileFromNoise(t, x, y, seed){
   // 树：湿度 × 高度带
   if(!t.water && t.h > 1.2 && t.h < 6.0){
     const m = moistureAt(x, y, seed);
-    // R9：绿化密度降低（原 m>0.52 *1.8 → m>0.58 *1.1，约降 50%+）
-    if(m > 0.58 && hash2(x, y, seed + 9) < (m - 0.58) * 1.1) t.tree = 1;
+    // R9 + review：略低于原稿，仍保留林地感（原 0.52*1.8）
+    if(m > 0.55 && hash2(x, y, seed + 9) < (m - 0.55) * 1.35) t.tree = 1;
   }
   t.live = true;
 }
@@ -294,7 +294,8 @@ export function applyTool(G, hx, hy, dt){
     invalidateBuiltCache(G);
     G.power = Math.max(0, G.power - consume);
     logPush(G, 90, tx, ty);
-    if(typeof G.onZonePlaced === 'function') G.onZonePlaced(tx, ty, z);
+    // 只走移除回调，禁止 onZonePlaced（会误写「建起」日志）
+    if(typeof G.onZoneRemoved === 'function') G.onZoneRemoved(tx, ty, z);
     return;
   }
 

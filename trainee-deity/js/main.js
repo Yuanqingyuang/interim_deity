@@ -130,6 +130,14 @@ function boot(){
     R.syncWorld(G);
     updateUI();
   };
+  G.onZoneRemoved = (x, y, z)=>{
+    // 拆除日志已在 terrain 写 code 90，这里只同步视图
+    invalidateBuiltCache(G);
+    refreshBuiltCache(G);
+    R.syncWorld(G);
+    syncNpc();
+    updateUI();
+  };
   // R6：点击/拖动命中粒子（节流，避免掉帧）
   let _hitAcc = 0;
   G.onToolHit = (x, y, toolKey)=>{
@@ -546,10 +554,13 @@ function autoBuild(){
     need[z] = cnt[z] < lo ? lo : Math.min(hi, cnt[z] + 2);
   }
 
-  // 当前供需（按已划定格）
-  const foodOut = F.foodPerSec(cnt[2]);
+  // R-review：供需与 tick 一致，按「已建成」计
+  ensureBuiltCache();
+  const bcA = G._builtCache || {1:0,2:0,3:0,4:0};
+  const farmsBuilt = bcA[2]||0, indsBuilt = bcA[3]||0;
+  const foodOut = F.foodPerSec(farmsBuilt);
   const foodNeed = F.foodNeed(G.pop);
-  const indOut = F.industryPerSec(cnt[3]);
+  const indOut = F.industryPerSec(indsBuilt);
   let pending = 0;
   eachTile(G, (t)=>{ if(t.zone>0 && !t.built) pending++; });
   const buildDemand = pending * F.NUM.C0 * Math.pow(1.5, E);
@@ -609,6 +620,7 @@ function autoBuild(){
   // 2) 产能不够 → 工
   // 3) 粮+产有余且住房缺口 → 房
   // 4) 教堂缺口（按公式 low，不只看信仰压力）
+  // 缺口：公式目标用 zoned（还要继续建），实际供不应求用 built
   const farmShort = cnt[2] < need[2] || foodOut < foodNeed;
   const indShort = cnt[3] < need[3] || indOut < buildDemand;
   const churchShort = cnt[4] < need[4] || (!G.faithRate || G.faithRate < AUTO.faithPressure);
@@ -644,9 +656,17 @@ function castMiracle(key){
     R.spawnBurst((Math.random()-0.5)*8, (Math.random()-0.5)*8, col, 18);
   }
   if(key==='build'){
-    eachTile(G, (t)=>{
-      if(t.zone>0 && !t.built){ t.prog = Math.min(1, t.prog+0.35); }
-    });
+    // 只推 pending，避免全图 eachTile
+    if(!G._pendingValid || !G._pendingTiles){
+      const list = [];
+      eachTile(G, (t,x,y)=>{ if(t.zone>0 && !t.built) list.push({x,y}); });
+      G._pendingTiles = list;
+      G._pendingValid = true;
+    }
+    for(const p of G._pendingTiles){
+      const t = getTile(G, p.x, p.y);
+      if(t && t.zone>0 && !t.built) t.prog = Math.min(1, t.prog+0.35);
+    }
     for(const w of G.wonderList){ if(!w.done) w.prog = Math.min(1, w.prog+0.12); }
     R.syncWorld(G);
   }
@@ -670,6 +690,8 @@ function placeWonder(x, y){
   const t = getTile(G, x, y);
   if(!t){ toast('这里还不能放置奇迹'); return; }
   if(t.water){ toast('不能在水面放置奇迹'); return; }
+  if(t.zone > 0){ toast('该地块已有分区'); return; }
+  if(t.h < 1.0 || t.h > 5.5){ toast('地形不适合放置奇迹'); return; }
   if(G.faith < w.faithCost){ toast(`信仰不足，需 ${w.faithCost}`); return; }
   G.faith = Math.max(0, G.faith - w.faithCost);
   G.wonderList.push({ era, x, y, prog:0, done:false });

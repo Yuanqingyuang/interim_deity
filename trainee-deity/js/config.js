@@ -23,7 +23,7 @@ export const ERAS = [
 ];
 
 // R5：星星仅由里程碑触发（每时代 3 个，一次性）。禁止纯 faithRate 时间出星。
-// check(G, ctx) — ctx: { farms, inds, churches, houses }（zoned 计数）
+// check(G, ctx) — ctx: { farms, inds, churches, houses }（已建成 built 计数，与 tick 一致）
 export const MILESTONES = [
   [
     { id: 'e1pop',  label: '人口≥50',   check: (G) => G.pop >= 50 },
@@ -51,8 +51,6 @@ export const MILESTONES = [
     { id: 'e5won',  label: '太空电梯完成', check: (G) => !!G.wonders[4] },
   ],
 ];
-
-export const STAR_FAITH = [60, 500, 4000, 4e4, 4e5];
 
 export const powerMaxOf = (era)=> 100 + era*60;
 export const powerRegenOf = (faithRate)=> 2.5 + Math.min(10, faithRate*0.02);

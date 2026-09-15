@@ -1,7 +1,6 @@
 // 实习神明 · UI
-import { ERAS, powerMaxOf, WONDERS } from './config.js';
+import { ERAS, powerMaxOf, powerRegenOf, WONDERS, MILESTONES } from './config.js';
 import * as F from './formulas.js';
-import { countZone } from './state.js';
 
 function $(id){ return document.getElementById(id); }
 
@@ -94,16 +93,19 @@ export class UI {
     $('logClose')?.addEventListener('click', ()=>this.h.onToggleLog?.());
     $('saveDialogClose')?.addEventListener('click', ()=>this.h.onCloseSaves?.());
     // R11 导出/导入
-    $('saveExportBtn')?.addEventListener('click', ()=>{
-      const slot = this._exportSlot || 'quick';
+    const downloadSlot = (slot)=>{
       const json = this.h.onExportSave?.(slot);
-      if(!json){ /* toast 由 main 处理 */ return; }
+      if(!json) return;
       const blob = new Blob([json], { type: 'application/json' });
       const a = document.createElement('a');
       a.href = URL.createObjectURL(blob);
       a.download = `trainee-deity-${slot}-${Date.now()}.json`;
       a.click();
       URL.revokeObjectURL(a.href);
+    };
+    this._downloadSlot = downloadSlot;
+    $('saveExportBtn')?.addEventListener('click', ()=>{
+      downloadSlot(this._exportSlot || 'quick');
     });
     $('saveImportBtn')?.addEventListener('click', ()=> $('saveImportFile')?.click());
     $('saveImportFile')?.addEventListener('change', (e)=>{
@@ -213,8 +215,18 @@ export class UI {
       btn.className = 'slot-act';
       btn.textContent = mode==='save' ? '保存' : '读取';
       btn.disabled = mode==='load' && !m;
-      btn.onclick = ()=>onAct(slot);
+      btn.onclick = ()=>{
+        this._exportSlot = slot;
+        onAct(slot);
+      };
       div.appendChild(btn);
+      // 导出：有档才可点
+      const exp = document.createElement('button');
+      exp.className = 'slot-act';
+      exp.textContent = '导出';
+      exp.disabled = !m;
+      exp.onclick = ()=>{ this._exportSlot = slot; this._downloadSlot?.(slot); };
+      div.appendChild(exp);
       box.appendChild(div);
     }
   }
@@ -225,7 +237,7 @@ export class UI {
 
     e.powerVal.textContent = String(Math.floor(G.power));
     e.powerCap.textContent = `/${powerMaxOf(G.era)}`;
-    e.powerRate.textContent = `+${(2.5+Math.min(10,G.faithRate*0.02)).toFixed(1)}/s`;
+    e.powerRate.textContent = `+${powerRegenOf(G.faithRate).toFixed(1)}/s`;
     e.faithVal.textContent = String(Math.floor(G.faith));
     e.faithRate.textContent = `+${G.faithRate.toFixed(1)}/s`;
     // 下一奇观信仰差额（已建/在建则显示完成）
@@ -240,7 +252,12 @@ export class UI {
     }
     e.popVal.textContent = Math.floor(G.pop).toLocaleString();
     e.starVal.textContent = String(G.stars);
-    e.starProg.textContent = `${Math.floor(G.starProg*100)}%`;
+    if(e.starProg){
+      const eraMs = MILESTONES[G.era] || [];
+      const flags = G.starMilestones?.[G.era] || [];
+      const done = eraMs.reduce((n,_,i)=> n + (flags[i]?1:0), 0);
+      e.starProg.textContent = `${done}/${eraMs.length}`;
+    }
 
     const c = G._builtCache;
     const farms = (c && c.valid) ? (c[2]||0) : 0;
