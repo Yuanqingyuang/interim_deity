@@ -54,7 +54,7 @@ R0 基线审计完成。项目已从原路径复制到本会话工作区 `traine
 
 - [x] T0: 复制项目到会话工作区并 git 基线 — acceptance: worktree 内可打开 index.html (covers: S2)
 - [x] T0.1: R0 基线审计定位 — acceptance: 本表列出各 P0 关键 file:line (covers: S2)
-- [ ] T1: R1 存档卡死 — acceptance: 计时日志+失败 toast+连续存读 10 次无异常 (covers: S2; depends: T0)
+- [x] T1: R1 存档卡死 — acceptance: 计时日志+失败 toast+连续存读 10 次无异常 (covers: S2; depends: T0)
 - [ ] T2: R2 同格幂等+工厂 — acceptance: 同坐标不重复；工业坐标日志正确 (covers: S2; depends: T1)
 - [ ] T3: R3 自动建造 PRNG — acceptance: 同种子序列可复现；每 tick ≤ maxPerTick (covers: S2; depends: T2)
 - [ ] T4: R4 地形速度+信仰 UI — acceptance: 抬升 1s ≤ 原 60%；信仰不为负；顶栏有速率/差额 (covers: S2)
