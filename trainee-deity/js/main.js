@@ -1,5 +1,5 @@
 // 实习神明 · 主循环
-import { TILE, MIRACLES, WONDERS, ERAS, AUTO, TOOLS, STAR_FAITH, ZONES,
+import { TILE, MIRACLES, WONDERS, ERAS, AUTO, TOOLS, MILESTONES, ZONES,
   powerMaxOf, powerRegenOf, sampleSun } from './config.js';
 import { createState, housingCap, faithMult, serializeState, deserializeState,
   refreshBuiltCache, invalidateBuiltCache, getTile, eachTile } from './state.js';
@@ -382,6 +382,7 @@ function tick(dt){
         R.spawnBurst(w.x*TILE, w.y*TILE, 0xffd54f, 40);
         toast(`${WONDERS[w.era].name}建成！${WONDERS[w.era].bonus}`);
         wonderChanged = true;
+        checkFinalWin();
       }
     }
   }
@@ -402,13 +403,41 @@ function tick(dt){
   if(G.boostGrow>0) nextPop = Math.min(cap, G.pop + (nextPop-G.pop)*2 + 0.6*dt);
   G.pop = Math.max(1, nextPop);
 
-  G.starProg += G.faithRate * dt / STAR_FAITH[E];
-  while(G.starProg >= 1){
-    G.stars += 1; G.starProg -= 1;
-    toast('凝聚一颗星星 ⭐');
-  }
+  // R5：星星只由里程碑触发，删除 faithRate 时间累积
+  checkStarMilestones(E, farms, inds, churches, houses);
 
   if(G.boostRain>0 && Math.random()<dt*14) R.spawnRain(0, 0);
+}
+
+/** 每时代 3 个里程碑；完成 +1 星（位图防重复） */
+function checkStarMilestones(E, farms, inds, churches, houses){
+  if(!G.starMilestones) G.starMilestones = [[],[],[],[],[]];
+  while(G.starMilestones.length < 5) G.starMilestones.push([false,false,false]);
+  const flags = G.starMilestones[E] || (G.starMilestones[E] = [false,false,false]);
+  const list = MILESTONES[E] || [];
+  const ctx = { farms, inds, churches, houses };
+  for(let i=0;i<list.length;i++){
+    if(flags[i]) continue;
+    if(list[i].check(G, ctx)){
+      flags[i] = true;
+      G.stars += 1;
+      toast(`里程碑达成：${list[i].label} ⭐`);
+      logPush(G, 40, 0, 0);
+    }
+  }
+}
+
+/** 当前时代里程碑文本（UI） */
+export function milestoneSummary(G, farms, inds, churches){
+  const E = F.eraIndex(G);
+  const list = MILESTONES[E] || [];
+  const flags = G.starMilestones?.[E] || [];
+  const ctx = { farms, inds, churches, houses: 0 };
+  return list.map((m,i)=>{
+    const done = !!flags[i];
+    const ok = done || m.check(G, ctx);
+    return `${ok?'✓':'○'} ${m.label}`;
+  }).join(' · ');
 }
 
 const ZONE_COLORS = {
@@ -564,12 +593,15 @@ function placeWonder(x, y){
 }
 
 function eraReady(){
+  // R5：E1 无需奇迹；E2–E5 需本时代奇迹；E5 已是终点（通关看太空电梯）
   if(G.era >= 4) return false;
-  return G.pop >= ERAS[G.era].popGoal && G.wonders[G.era] && G.stars >= ERAS[G.era].starCost;
+  const needWonder = G.era >= 1;
+  const wonderOk = !needWonder || !!G.wonders[G.era];
+  return G.pop >= ERAS[G.era].popGoal && wonderOk && G.stars >= ERAS[G.era].starCost;
 }
 function advanceEra(){
   if(!eraReady()){ toast('进阶条件未满足'); return; }
-  G.stars -= ERAS[G.era].starCost;
+  G.stars = Math.max(0, G.stars - ERAS[G.era].starCost);
   G.era += 1;
   G.starProg = 0;
   G.terrainDirty = true;
@@ -581,11 +613,23 @@ function advanceEra(){
     R.spawnBurst((Math.random()-0.5)*10, (Math.random()-0.5)*10, 0xffd54f, 30);
   }
   toast(`迈入「${ERAS[G.era].name}」！`);
-  if(G.era >= 1){
-    setTimeout(()=>{
-      G.over = true;
-      document.getElementById('winScreen').classList.remove('hidden');
-    }, 1600);
+  logPush(G, 30, 0, 0);
+  // R5：不再强制 over；仅 E5 太空电梯通关
+}
+
+/** E5 太空电梯完工 → 通关 */
+function checkFinalWin(){
+  if(G.over) return;
+  if(G.era >= 4 && G.wonders[4]){
+    G.over = true;
+    const win = document.getElementById('winScreen');
+    if(win){
+      const sub = win.querySelector('.subtitle');
+      if(sub) sub.textContent = '文明迈入 · 星际时代';
+      const desc = win.querySelector('.desc');
+      if(desc) desc.textContent = '太空电梯建成，试炼完成。你的子民已仰望群星。';
+      win.classList.remove('hidden');
+    }
   }
 }
 
@@ -627,8 +671,13 @@ function updateUI(){
   const ready = eraReady();
   const btn = document.getElementById('advanceBtn');
   btn.disabled = !ready;
+  const E = F.eraIndex(G);
+  const list = MILESTONES[E] || [];
+  const flags = G.starMilestones?.[E] || [];
+  const ms = list.map((m,i)=> (flags[i]?'✓':'○') + m.label.slice(0,6)).join(' ');
+  const wonder = G.era===0 ? '（进阶无需奇迹）' : (G.wonders[G.era]?'奇迹✓':'奇迹✗');
   document.getElementById('advReq').textContent =
-    `人口 ${Math.floor(G.pop)}/${ERAS[G.era].popGoal} · 奇迹 ${G.wonders[G.era]?'✓':'✗'} · 星星 ${G.stars}/${ERAS[G.era].starCost}`;
+    `人口 ${Math.floor(G.pop)}/${ERAS[G.era].popGoal} · ${wonder} · ⭐${G.stars}/${ERAS[G.era].starCost} · ${ms}`;
 }
 
 let toastTimer;

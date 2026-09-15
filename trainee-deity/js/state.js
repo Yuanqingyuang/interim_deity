@@ -76,6 +76,8 @@ export function createState(seed){
     seed: seed != null ? (seed|0) : ((Math.random()*1e9)|0),
     power:100, powerMax:100, faith:0, totalFaith:0,
     pop:20, stars:0, starProg:0, faithRate:0,
+    // R5：每时代 3 个里程碑完成位图（存档兼容：缺失则全 false）
+    starMilestones: [[false,false,false],[false,false,false],[false,false,false],[false,false,false],[false,false,false]],
     chunks, terrainDirty:true,
     wonderList:[], wonders:[false,false,false,false,false],
     boostGrow:0, boostBuild:0, boostRain:0,
@@ -166,6 +168,7 @@ export function serializeState(G){
     seed: G.seed|0, era: G.era|0, speed: G.speed|0, over: G.over,
     power: r2(G.power), faith: r2(G.faith), totalFaith: r2(G.totalFaith),
     pop: r2(G.pop), stars: G.stars|0, starProg: r3(G.starProg),
+    starMilestones: (G.starMilestones||[]).map(arr=>(arr||[]).map(v=>v?1:0)),
     dayTime: r3(G.dayTime), time: r2(G.time),
     wonders: G.wonders.map(v=>v?1:0),
     wonderList: G.wonderList.map(w=>({era:w.era|0,x:w.x|0,y:w.y|0,prog:r3(w.prog),done:w.done?1:0})),
@@ -235,6 +238,9 @@ export function deserializeState(G, data){
   G.pop = +data.pop || 20;
   G.stars = data.stars|0;
   G.starProg = +data.starProg || 0;
+  G.starMilestones = (data.starMilestones||[[0,0,0],[0,0,0],[0,0,0],[0,0,0],[0,0,0]])
+    .map(arr => (arr||[0,0,0]).map(v=>!!v));
+  while(G.starMilestones.length < 5) G.starMilestones.push([false,false,false]);
   G.dayTime = +data.dayTime || 0.35;
   G.time = +data.time || 0;
   G.wonders = (data.wonders||[0,0,0,0,0]).map(v=>!!v);

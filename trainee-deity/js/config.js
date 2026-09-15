@@ -16,10 +16,40 @@ export const FOG_FAR = 100;
 
 export const ERAS = [
   { name:'蛮荒时代', roman:'I',  popTarget:200,     starCost:3, popGoal:200 },
-  { name:'城邦时代', roman:'II', popTarget:2000,    starCost:4, popGoal:2000 },
-  { name:'封建时代', roman:'III',popTarget:50000,   starCost:5, popGoal:50000 },
-  { name:'工业时代', roman:'IV', popTarget:5e6,     starCost:6, popGoal:5e6 },
-  { name:'星际时代', roman:'V',  popTarget:5e9,     starCost:0, popGoal:5e9 },
+  { name:'城邦时代', roman:'II', popTarget:2000,    starCost:3, popGoal:2000 },
+  { name:'封建时代', roman:'III',popTarget:50000,   starCost:3, popGoal:50000 },
+  { name:'工业时代', roman:'IV', popTarget:5e6,     starCost:3, popGoal:5e6 },
+  { name:'星际时代', roman:'V',  popTarget:5e9,     starCost:3, popGoal:5e9 },
+];
+
+// R5：星星仅由里程碑触发（每时代 3 个，一次性）。禁止纯 faithRate 时间出星。
+// check(G, ctx) — ctx: { farms, inds, churches, houses }（zoned 计数）
+export const MILESTONES = [
+  [
+    { id: 'e1pop',  label: '人口≥50',   check: (G) => G.pop >= 50 },
+    { id: 'e1farm', label: '农田≥10',   check: (G, c) => c.farms >= 10 },
+    { id: 'e1chr',  label: '教堂≥1',    check: (G, c) => c.churches >= 1 },
+  ],
+  [
+    { id: 'e2pop',  label: '人口≥400',  check: (G) => G.pop >= 400 },
+    { id: 'e2ind',  label: '工业≥8',    check: (G, c) => c.inds >= 8 },
+    { id: 'e2won',  label: '巨石阵完成', check: (G) => !!G.wonders[0] },
+  ],
+  [
+    { id: 'e3pop',  label: '人口≥5000', check: (G) => G.pop >= 5000 },
+    { id: 'e3farm', label: '农田≥80',   check: (G, c) => c.farms >= 80 },
+    { id: 'e3won',  label: '金字塔完成', check: (G) => !!G.wonders[1] },
+  ],
+  [
+    { id: 'e4pop',  label: '人口≥50万', check: (G) => G.pop >= 5e5 },
+    { id: 'e4ind',  label: '工业≥200',  check: (G, c) => c.inds >= 200 },
+    { id: 'e4won',  label: '大教堂完成', check: (G) => !!G.wonders[2] },
+  ],
+  [
+    { id: 'e5pop',  label: '人口≥5000万', check: (G) => G.pop >= 5e7 },
+    { id: 'e5ind',  label: '工业≥500',    check: (G, c) => c.inds >= 500 },
+    { id: 'e5won',  label: '太空电梯完成', check: (G) => !!G.wonders[4] },
+  ],
 ];
 
 export const STAR_FAITH = [60, 500, 4000, 4e4, 4e5];
