@@ -4,6 +4,9 @@ import * as F from './formulas.js';
 
 function $(id){ return document.getElementById(id); }
 
+// 与 WONDERS 顺序一一对应：巨石阵/金字塔/大教堂/摩天塔/太空电梯
+const WONDER_ICON = ['💫','🔺','⛪','🏙️','🚀'];
+
 function fmtNum(v){
   if(!Number.isFinite(v)) return '—';
   if(v >= 1e8) return (v/1e8).toFixed(1)+'亿';
@@ -36,11 +39,43 @@ export class UI {
       dayVal: $('dayVal'),
       autoLog: $('autoLog'),
       wonderBtn: $('wonderBtn'),
+      wonderIco: $('wonderIco'),
+      wonderName: $('wonderName'),
+      wonderCost: $('wonderCost'),
     };
     this.bind();
   }
 
+  /**
+   * 分类菜单折叠：点分类头收起/展开。
+   * 默认收起低频分类以减轻画面拥挤；用户选择记在 localStorage。
+   */
+  _bindGroups(){
+    const KEY = 'td/ui/collapsed';
+    const DEFAULT_COLLAPSED = ['操作', '视角', '神迹'];
+    let saved = {};
+    try{ saved = JSON.parse(localStorage.getItem(KEY) || '{}') || {}; }catch(_){ saved = {}; }
+    const collapsedOf = (name)=> (name in saved) ? !!saved[name] : DEFAULT_COLLAPSED.includes(name);
+    document.querySelectorAll('.tool-group > .group-head, .mb-group > .group-head').forEach(head=>{
+      const group = head.parentElement;
+      const name = group?.dataset.group || '';
+      const apply = (collapsed)=>{
+        group.classList.toggle('collapsed', collapsed);
+        head.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+        head.title = collapsed ? '展开分类' : '收起分类';
+      };
+      apply(collapsedOf(name));
+      head.addEventListener('click', ()=>{
+        const next = !group.classList.contains('collapsed');
+        apply(next);
+        saved[name] = next;
+        try{ localStorage.setItem(KEY, JSON.stringify(saved)); }catch(_){}
+      });
+    });
+  }
+
   bind(){
+    this._bindGroups();
     document.querySelectorAll('.tool').forEach(b=>{
       b.addEventListener('click', ()=>{
         // 视角旋转/移动视角由 main 决定是否保持 active（可开关）
@@ -96,6 +131,7 @@ export class UI {
     $('quickSaveBtn')?.addEventListener('click', ()=>this.h.onQuickSave?.());
     $('quickLoadBtn')?.addEventListener('click', ()=>this.h.onQuickLoad?.());
     $('logBtn')?.addEventListener('click', ()=>this.h.onToggleLog?.());
+    $('pauseLogBtn')?.addEventListener('click', ()=>this.h.onToggleLog?.());
     $('logClose')?.addEventListener('click', ()=>this.h.onToggleLog?.());
     $('saveDialogClose')?.addEventListener('click', ()=>this.h.onCloseSaves?.());
     // R11 导出/导入
@@ -295,6 +331,16 @@ export class UI {
         e.faithNeed.classList.toggle('low', gap > 0);
       }
     }
+    // 奇观按钮：名称/花费随当前时代重算（原为 index.html 硬编码，时代进阶后仍写着「巨石阵」）
+    if(e.wonderName){
+      const w = WONDERS[G.era];
+      if(w){
+        e.wonderIco.textContent = WONDER_ICON[G.era] || '💫';
+        e.wonderName.textContent = `建${w.name}`;
+        e.wonderCost.textContent = `🙏${fmtNum(w.faithCost)}`;
+        e.wonderBtn.title = `${w.name}：${w.bonus}（耗时 ${w.time}s）`;
+      }
+    }
     e.popVal.textContent = Math.floor(G.pop).toLocaleString();
     e.starVal.textContent = String(G.stars);
     if(e.starProg){
@@ -322,7 +368,8 @@ export class UI {
     }
     if(e.indOut) e.indOut.textContent = `${fmtNum(indOut)}/s`;
     if(e.indNeed){
-      e.indNeed.textContent = `需 ${fmtNum(indNeed)}/s`;
+      // 与底部进阶条的「进阶门槛（gateOf = 刚需×50%）」区分口径，避免同屏两个数字互相矛盾
+      e.indNeed.textContent = `刚需 ${fmtNum(indNeed)}/s`;
       e.indNeed.classList.toggle('low', indOut < indNeed);
     }
 

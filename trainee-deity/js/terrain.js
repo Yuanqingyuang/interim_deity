@@ -721,11 +721,13 @@ export function findAutoSite(G, zoneType){
 
   // R3：种子 PRNG 采样
   const rnd = autoRng(G, zoneType);
-  const R = zoneType===3 ? 18 : 14;
-  const tries = 80;
+  const R0 = zoneType===3 ? 18 : 14;
+  const tries = 96;
   let best=null, bestScore=-1e9;
 
   for(let i=0;i<tries;i++){
+    // 近处排满时逐圈外扩：半径写死会在中心区饱和后永远找不到点位
+    const R = i < tries*0.5 ? R0 : (i < tries*0.75 ? R0*1.7 : R0*2.6);
     const x = Math.round(sx + (rnd()*2-1)*R);
     const y = Math.round(sy + (rnd()*2-1)*R);
     if(x < b.minX || x > b.maxX || y < b.minY || y > b.maxY) continue;
@@ -750,6 +752,10 @@ export function findAutoSite(G, zoneType){
     let score = 1.2 + adj*2 - dist*0.28 - flat*2.0;
 
     if(zoneType===1){
+      // 住房受「不得与任何已划区相邻」的硬约束（见 canPlaceZoneAt），adj 恒为 0，
+      // 拿不到上面的 adj*2 加成；改用 2 格环内的居住密度计分，
+      // 否则只剩 1.2 - dist*0.28，只有质心约 4 格内才可能过阈值（而那里早被占满）
+      score += countResNear(G, x, y, 2) * 1.2;
       score += hash2(x,y,seed+4)*0.3;
       if(dist > 16) score -= 1.5;
     } else if(zoneType===2){
@@ -772,6 +778,9 @@ export function findAutoSite(G, zoneType){
 
     if(score > bestScore){ bestScore=score; best=[x,y]; }
   }
+  // 住房得分天然偏低（见上），只要存在几何合法的点位就应当可用；
+  // 否则中心区饱和后 findAutoSite(1) 会永久返回 null，人口停滞、无法进阶
+  if(zoneType === 1) return best;
   return bestScore > 0.2 ? best : null;
 }
 

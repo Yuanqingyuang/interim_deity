@@ -1,6 +1,8 @@
 // 实习神明 · 数值公式（对齐 numeric-design.md）
 // E 为 1..5；代码里 era 下标 0..4
 
+import { FAITH_ERA_DAMP } from './config.js';
+
 export const T = [200, 2000, 50000, 5e6, 5e9];
 
 export const NUM = {
@@ -60,8 +62,14 @@ export function popCap(E, houses, farms, industries){
 
 export function foodPerSec(farms){ return farms * NUM.C_FARM; }
 export function foodNeed(N){ return N * NUM.R_FOOD; }
-export function faithPerSec(churches, N){
-  return churches * NUM.K_CHURCH + N * NUM.K_FAITH_POP;
+/**
+ * 信仰/秒 = (教堂 × K_CHURCH + 人口 × K_FAITH_POP) × 时代阻尼
+ * 人口项必须按时代阻尼：否则人口每时代涨 10~1000 倍会直接把信仰产出带爆
+ * （各时代满规模产出见 config.js FAITH_ERA_BASE）
+ */
+export function faithPerSec(churches, N, E=0){
+  const i = Math.max(0, Math.min(4, E|0));
+  return (churches * NUM.K_CHURCH + N * NUM.K_FAITH_POP) * FAITH_ERA_DAMP[i];
 }
 export function industryPerSec(industries){ return industries * NUM.K_IND; }
 

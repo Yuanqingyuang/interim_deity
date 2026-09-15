@@ -22,13 +22,15 @@ server {
   index index.html;
 
   location / { try_files $uri $uri/ /index.html; }
-  location ~* \.js$ { default_type application/javascript; }
+  location ~* \.js$  { default_type application/javascript; add_header Cache-Control "no-cache"; }
+  location ~* \.css$ { default_type text/css;              add_header Cache-Control "no-cache"; }
 }
 ```
 
 ## 注意
 
 - ES Module **不能**用 `file://` 打开
+- **缓存**：本项目是源码直出、无构建哈希。若给 `.js` / `.css` 设长缓存，改版后老用户会继续跑旧代码（调试时实测过：浏览器仍在用旧的 `styles.css` 与 `saves.js`）。建议 `Cache-Control: no-cache`（每次校验），或给资源路径加版本号
 - Three.js 已本地 vendor：`vendor/three@0.161.0/`（importmap 指向本地，离线可玩）
 - 账号与存档在**浏览器 localStorage**；密码为本机 PBKDF2，**非安全边界**
 - 存档对话框支持导出/导入 JSON
@@ -39,3 +41,5 @@ server {
 python3 -m http.server 8080
 # 或 npx serve .
 ```
+
+调试性能时用 `?debug=1` 打开性能面板（FPS / 帧时间 / DrawCall / 三角面）。

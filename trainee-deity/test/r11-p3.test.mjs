@@ -1,6 +1,7 @@
 // R11：formulas 断言 + 存档导入导出
 import { T, NUM, buildingLow, buildingHigh, popCap, foodPerSec, foodNeed, faithPerSec, industryPerSec, buildSpeed, renderVillagers } from '../js/formulas.js';
 import { createState, serializeState, deserializeState } from '../js/state.js';
+import { ERAS, WONDERS, FAITH_ERA_BASE, FAITH_ERA_DAMP, FAITH_FILL_SEC } from '../js/config.js';
 import { writeSave, readSave, exportSaveJson, importSaveJson, deleteSave } from '../js/saves.js';
 
 function assert(cond, msg){
@@ -16,7 +17,17 @@ assert(popCap(0, 10, 0, 0) === 40, 'popCap housing E1');
 assert(popCap(2, 0, 10, 0) === 50, 'popCap food E3');
 assert(popCap(4, 0, 0, 100) === Math.floor(100*1/0.12), 'popCap industry E5');
 assert(foodPerSec(10)===50 && foodNeed(20)===20, 'food');
-assert(Math.abs(faithPerSec(5, 20) - (5*2 + 20*0.1)) < 1e-9, 'faith');
+assert(Math.abs(faithPerSec(5, 20, 0) - (5*2 + 20*0.1) * FAITH_ERA_DAMP[0]) < 1e-9, 'faith 按时代阻尼');
+// 信仰关键不变量：每个时代「满规模攒满本时代奇迹」耗时一致 = FAITH_FILL_SEC
+// （人口每时代涨 10~1000 倍，若不阻尼则后期信仰会秒出、经济失效）
+for(let E=0; E<5; E++){
+  const N = ERAS[E].popGoal;
+  const churches = buildingLow(E, 4);
+  const rate = faithPerSec(churches, N, E);
+  const sec = WONDERS[E].faithCost / rate;
+  assert(Math.abs(rate - FAITH_ERA_BASE[E]) < 1e-6, `E${E+1} 满规模信仰/秒 = ${FAITH_ERA_BASE[E]}`);
+  assert(Math.abs(sec - FAITH_FILL_SEC) < 1e-6, `E${E+1} 攒满奇迹 ${sec.toFixed(1)}s ≈ ${FAITH_FILL_SEC}s`);
+}
 assert(industryPerSec(8)===8, 'industry');
 const v = buildSpeed(0, 30, 50);
 assert(v > 0 && v <= NUM.V0*2, `buildSpeed ${v}`);

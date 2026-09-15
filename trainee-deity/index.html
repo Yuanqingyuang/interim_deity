@@ -70,6 +70,7 @@
       <button id="resumeBtn" class="btn-primary">继 续</button>
       <button id="pauseSaveBtn" class="btn-secondary">保 存</button>
       <button id="pauseLoadBtn" class="btn-secondary">读 取 存 档</button>
+      <button id="pauseLogBtn" class="btn-secondary">子民日志</button>
       <button id="pauseMenuBtn" class="btn-secondary">回到主菜单</button>
     </div>
   </div>
@@ -124,10 +125,10 @@
       <span id="foodOut">0/s</span>
       <span class="need" id="foodNeed">需 0/s</span>
     </div>
-    <div class="res" title="工业产能 产出/秒 / 需求/秒">
+    <div class="res" title="工业产能 产出/秒 / 刚需/秒（建造与人口所需；进阶门槛为该值的 50%，见底部进阶条）">
       <span class="ico">🏭</span>
       <span id="indOut">0/s</span>
-      <span class="need" id="indNeed">需 0/s</span>
+      <span class="need" id="indNeed">刚需 0/s</span>
     </div>
     <div class="res">
       <span class="ico">⭐</span><span id="starVal">0</span>
@@ -137,57 +138,73 @@
       <span id="dayVal">☀ 白昼</span>
     </div>
     <div class="spacer"></div>
-    <button id="logBtn" class="btn-save" title="子民日志">📜 日志</button>
     <button id="quickSaveBtn" class="btn-save" title="快速保存">⚡ 存</button>
-    <button id="quickLoadBtn" class="btn-save" title="快速读取">⚡ 读</button>
     <button id="pauseBtn" class="btn-save" title="暂停菜单">⏸ 菜单</button>
+  </div>
+
+  <div id="speedCtrl" class="speed-ctrl hidden">
     <div class="era-badge" id="eraBadge">
       <span class="era-roman">I</span>
       <span class="era-name">蛮荒时代</span>
     </div>
-  </div>
-
-  <div id="speedCtrl" class="speed-ctrl hidden">
     <button class="spd" data-spd="1">×1</button>
     <button class="spd active" data-spd="2">⏩ ×2</button>
     <button class="spd" data-spd="4">×4</button>
   </div>
 
-  <!-- 左侧工具栏 -->
+  <!-- 左侧工具栏（各分类可点击收起） -->
   <div id="toolBar" class="toolbar hidden">
     <div class="tool-group" data-group="地形">
-      <button class="tool active" data-tool="raise"><span class="t-ico">⛰️</span>抬升<span class="cost">⚡6/s</span></button>
-      <button class="tool" data-tool="lower"><span class="t-ico">🕳️</span>下沉<span class="cost">⚡6/s</span></button>
-      <button class="tool" data-tool="flatten"><span class="t-ico">⬛</span>平整<span class="cost">⚡8/s</span></button>
-      <button class="tool" data-tool="water"><span class="t-ico">🌊</span>引水<span class="cost">⚡8/s</span></button>
-      <button class="tool" data-tool="tree"><span class="t-ico">🌳</span>绿化<span class="cost">⚡5/s</span></button>
+      <button type="button" class="group-head" aria-expanded="true"><span class="g-caret">▾</span><span class="g-name">地形</span></button>
+      <div class="group-body">
+        <button class="tool active" data-tool="raise"><span class="t-ico">⛰️</span>抬升<span class="cost">⚡6/s</span></button>
+        <button class="tool" data-tool="lower"><span class="t-ico">🕳️</span>下沉<span class="cost">⚡6/s</span></button>
+        <button class="tool" data-tool="flatten"><span class="t-ico">⬛</span>平整<span class="cost">⚡8/s</span></button>
+        <button class="tool" data-tool="water"><span class="t-ico">🌊</span>引水<span class="cost">⚡8/s</span></button>
+        <button class="tool" data-tool="tree"><span class="t-ico">🌳</span>绿化<span class="cost">⚡5/s</span></button>
+      </div>
     </div>
     <div class="tool-group" data-group="区域">
-      <button class="tool" data-tool="z_res"><span class="t-ico">🏘️</span>居住<span class="cost">⚡4/s</span></button>
-      <button class="tool" data-tool="z_agr"><span class="t-ico">🌾</span>农田<span class="cost">⚡4/s</span></button>
-      <button class="tool" data-tool="z_ind"><span class="t-ico">⛏️</span>工业<span class="cost">⚡4/s</span></button>
-      <button class="tool" data-tool="z_fai"><span class="t-ico">🛕</span>信仰<span class="cost">⚡4/s</span></button>
+      <button type="button" class="group-head" aria-expanded="true"><span class="g-caret">▾</span><span class="g-name">区域</span></button>
+      <div class="group-body">
+        <button class="tool" data-tool="z_res"><span class="t-ico">🏘️</span>居住<span class="cost">⚡4/s</span></button>
+        <button class="tool" data-tool="z_agr"><span class="t-ico">🌾</span>农田<span class="cost">⚡4/s</span></button>
+        <button class="tool" data-tool="z_ind"><span class="t-ico">⛏️</span>工业<span class="cost">⚡4/s</span></button>
+        <button class="tool" data-tool="z_fai"><span class="t-ico">🛕</span>信仰<span class="cost">⚡4/s</span></button>
+      </div>
     </div>
     <div class="tool-group" data-group="操作">
-      <button class="tool" data-tool="demolish"><span class="t-ico">🔨</span>拆除<span class="cost">⚡1/s</span></button>
+      <button type="button" class="group-head" aria-expanded="true"><span class="g-caret">▾</span><span class="g-name">操作</span></button>
+      <div class="group-body">
+        <button class="tool" data-tool="demolish"><span class="t-ico">🔨</span>拆除<span class="cost">⚡1/s</span></button>
+      </div>
     </div>
     <div class="tool-group" data-group="视角">
-      <button class="tool" data-tool="cam_rot" title="左键拖动旋转；再点关闭"><span class="t-ico">🧭</span>视角旋转</button>
-      <button class="tool" data-tool="cam_pan" title="左键拖动平移；再点关闭"><span class="t-ico">✋</span>移动视角</button>
-      <button class="tool" data-tool="view_home"><span class="t-ico">🏠</span>回城</button>
-      <button class="tool" data-tool="view_top"><span class="t-ico">🗺️</span>俯视</button>
+      <button type="button" class="group-head" aria-expanded="true"><span class="g-caret">▾</span><span class="g-name">视角</span></button>
+      <div class="group-body">
+        <button class="tool" data-tool="cam_rot" title="左键拖动旋转；再点关闭"><span class="t-ico">🧭</span>视角旋转</button>
+        <button class="tool" data-tool="cam_pan" title="左键拖动平移；再点关闭"><span class="t-ico">✋</span>移动视角</button>
+        <button class="tool" data-tool="view_home"><span class="t-ico">🏠</span>回城</button>
+        <button class="tool" data-tool="view_top"><span class="t-ico">🗺️</span>俯视</button>
+      </div>
     </div>
   </div>
 
-  <!-- 右下神迹与奇迹 -->
+  <!-- 右下神迹与奇迹（各分类可点击收起） -->
   <div id="miracleBar" class="miracle-bar hidden">
     <div class="mb-group" data-group="神迹">
-      <button class="mir" data-mir="grow"><span class="m-ico">🌱</span>丰收祝福<span class="m-cost">⚡30</span></button>
-      <button class="mir" data-mir="build"><span class="m-ico">🏗️</span>加速建造<span class="m-cost">⚡40</span></button>
-      <button class="mir" data-mir="rain"><span class="m-ico">🌧️</span>天降甘霖<span class="m-cost">⚡25</span></button>
+      <button type="button" class="group-head" aria-expanded="true"><span class="g-caret">▾</span><span class="g-name">神迹</span></button>
+      <div class="group-body">
+        <button class="mir" data-mir="grow"><span class="m-ico">🌱</span>丰收祝福<span class="m-cost">⚡30</span></button>
+        <button class="mir" data-mir="build"><span class="m-ico">🏗️</span>加速建造<span class="m-cost">⚡40</span></button>
+        <button class="mir" data-mir="rain"><span class="m-ico">🌧️</span>天降甘霖<span class="m-cost">⚡25</span></button>
+      </div>
     </div>
     <div class="mb-group" data-group="奇迹">
-      <button class="mir wonder-btn" id="wonderBtn"><span class="m-ico">💫</span>建巨石阵<span class="m-cost">🙏100</span></button>
+      <button type="button" class="group-head" aria-expanded="true"><span class="g-caret">▾</span><span class="g-name">奇迹</span></button>
+      <div class="group-body">
+        <button class="mir wonder-btn" id="wonderBtn"><span class="m-ico" id="wonderIco">💫</span><span id="wonderName">建巨石阵</span><span class="m-cost" id="wonderCost">🙏100</span></button>
+      </div>
     </div>
   </div>
 
@@ -203,6 +220,7 @@
   </div>
 
   <div id="toast" class="toast"></div>
+  <div id="perfHud" class="perf-hud hidden"></div>
   <div id="loader" class="loader">正在凝聚神力…</div>
 
   <script type="module" src="js/main.js"></script>

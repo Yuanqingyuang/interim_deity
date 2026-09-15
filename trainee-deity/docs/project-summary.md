@@ -14,10 +14,10 @@ index.html (登录/菜单/HUD)
 js/main.js     主循环 · 自动建造 · 暂停 · 存档接线
 js/state.js    G.chunks Map（10×10 区块）· 序列化
 js/terrain.js  heightAt/riverMask/sampleHeight · 工具 · 选址
-js/render.js   Three 地形/建筑/村民 · OrbitControls
+js/render.js   Three 地形/建筑/村民 · 昼夜光照/阴影/云/水 · OrbitControls
 js/formulas.js T(E) · 人口/粮/产能 · LAYOUT
 js/auth.js     本地用户 + 密码哈希
-js/saves.js    slot1/2/3 + quick
+js/saves.js    slot1/2/3 + quick · 写档失败返回 null
 js/log.js      代号编码 → 中文展开
 ```
 
@@ -41,7 +41,18 @@ js/log.js      代号编码 → 中文展开
 - 手工：单击 1 格，拖动连续
 - 选址：围绕居住质心随机采样
 
-## 5. 数值
+## 5. 渲染与光照
+
+- **昼夜**：`G.dayTime` 0→1 循环，`SUN_KEYS` 关键帧（`sampleSun`）插值出太阳/半球光/环境光强度与色调、雾色、水色
+- **太阳**：方向光绕**城区中心**（`_focus`）半径 55 环绕，`elev` 有下限（太阳不下山）
+- **阴影**：`PCFShadowMap` 1024²；正交框半径随区块范围自适应（`_syncShadow`），地形 / 建筑 / 树 / 奇观 / 村民全部投影，水面接收阴影
+- **天空**：512×256 canvas 竖向渐变 + 夜间星点 → `scene.background`，每 0.5s 重建
+- **云层**：单个 220×220 平面 + 平铺云斑纹理；用 `MeshBasicMaterial`，**必须手动按昼夜着色**（Basic 材质不吃光照，否则夜里云是纯白）
+- **时代配色**：`PALETTES[era]` 控制地表 / 水 / 天空 / 雾
+
+> ⚠️ 改 `sun.shadow.camera` 的 `left/right/top/bottom` 之后**必须**调 `updateProjectionMatrix()`，否则生效值仍是默认 `±5`（阴影只覆盖 10×10 世界单位）。
+
+## 6. 数值
 
 见 [numeric-design.md](../numeric-design.md)。
 
@@ -49,32 +60,44 @@ js/log.js      代号编码 → 中文展开
 - 产出按已划定格；住房容量按已建成格
 - 村民渲染：`clamp(round(50*log10(N)-85), min(E), max(E))`
 
-## 6. 账号 / 存档 / 日志
+## 7. 账号 / 存档 / 日志
 
 - 登录：昵称 + 密码（SHA-256），`localStorage`
-- 存档：3 槽 + 快速档
+- 存档：3 槽 + 快速档 + JSON 导出/导入
+- 自动存档：每 180s 写快速档；`writeSave` **失败返回 `null`**（配额/序列化），调用方必须检查并提示玩家
 - 日志：`[code,t,x,y]` 压缩
 - 暂停：冻结 tick 与 `G.time`
 
-## 7. 操作
+## 8. 操作
 
 右键旋转 · 中键平移 · 左键施法 · Esc 暂停
 
 流程：登录 → 主菜单 → 新游戏 → 开始试炼
 
-## 8. 部署
+**UI 布局**：左工具栏与右下神迹栏按 6 个分类（地形 / 区域 / 操作 / 视角 / 神迹 / 奇迹）**可点击收起**；
+默认收起低频分类（操作 / 视角 / 神迹），展开状态记在 `localStorage['td/ui/collapsed']`。
+顶栏固定**单行**（`flex-wrap:nowrap`）：换行会变成 100px+ 高压住下方控件；时代徽章与速度控制同排放在顶栏右下方。
+
+调试：URL 加 `?debug=1` 显示性能面板（FPS / 帧时间 / DrawCall / 三角面），并写入 `window.__perf`
+
+## 9. 部署
 
 见 [deploy.md](deploy.md)。
 
-## 9. 已知约束
+## 10. 已知约束
 
-- 存档仅本机
+- 存档仅本机（localStorage）；配额耗尽/序列化失败时写入返回 `null`，会提示玩家手动保存
 - 无限图为点采样，非全图 D8 水文
 - 大地图需避免全图扫描
+- 阴影正交框半径上限 120，城区继续外扩后外围不再有阴影
+- 天空 / 云 / 地形贴图均为程序生成，无美术资源；**音频暂缺**
 
-## 10. 待办
+## 11. 待办
 
-- [ ] Three.js 本地 vendor
-- [ ] 存档导入导出
-- [ ] 移动端适配加深
-- [ ] 奇迹 GATE(E) 接入
+- [x] Three.js 本地 vendor
+- [x] 存档导入导出
+- [x] 奇迹 GATE(E) 接入
+- [ ] 移动端适配加深（小视口面板仍偏挤；桌面 1920×1080 布局未复测）
+- [ ] 时代 II/III 的大教堂 / 摩天塔外观确认（需高人口存档才能看到）
+- [ ] 高人口场景性能验证（目前只测到 era I 空场景：120fps / 107 DrawCall / 1.48 万三角面）
+- [ ] 音频

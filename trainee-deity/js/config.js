@@ -67,14 +67,14 @@ export const AUTO = {
 export const DAY_LENGTH = 150;
 // 0=午夜 0.25=日出 0.5=正午 0.75=日落
 export const SUN_KEYS = [
-  { t:0.00, elev:0.14, azim:0.55, sun:0x8a9acc, amb:0x4a5578, inten:0.58, hemi:0.42 },
-  { t:0.22, elev:0.18, azim:0.70, sun:0xff9a5c, amb:0x7a6550, inten:0.78, hemi:0.52 },
+  { t:0.00, elev:0.14, azim:0.55, sun:0x8a9acc, amb:0x4a5578, inten:0.90, hemi:0.62 },
+  { t:0.22, elev:0.18, azim:0.70, sun:0xff9a5c, amb:0x7a6550, inten:0.95, hemi:0.68 },
   { t:0.30, elev:0.55, azim:0.85, sun:0xffd29a, amb:0x8a9aaa, inten:1.05, hemi:0.70 },
   { t:0.50, elev:1.00, azim:1.20, sun:0xfff2c8, amb:0xa8b8c8, inten:1.35, hemi:0.95 },
   { t:0.70, elev:0.55, azim:1.55, sun:0xffc080, amb:0x8a7a60, inten:1.05, hemi:0.70 },
-  { t:0.78, elev:0.22, azim:1.70, sun:0xff7a4a, amb:0x6a5548, inten:0.78, hemi:0.50 },
-  { t:0.90, elev:0.12, azim:1.85, sun:0x7a8aba, amb:0x4a5570, inten:0.52, hemi:0.38 },
-  { t:1.00, elev:0.14, azim:0.55, sun:0x8a9acc, amb:0x4a5578, inten:0.58, hemi:0.42 },
+  { t:0.78, elev:0.22, azim:1.70, sun:0xff7a4a, amb:0x6a5548, inten:0.95, hemi:0.66 },
+  { t:0.90, elev:0.12, azim:1.85, sun:0x7a8aba, amb:0x4a5570, inten:0.82, hemi:0.58 },
+  { t:1.00, elev:0.14, azim:0.55, sun:0x8a9acc, amb:0x4a5578, inten:0.90, hemi:0.62 },
 ];
 
 export const TOOLS = {
@@ -98,12 +98,23 @@ export const MIRACLES = {
   rain:  { cost:25, dur:12, field:'boostRain',  label:'天降甘霖' },
 };
 
+// ---- 信仰：按时代归一 ----
+// 原始公式「教堂×K_CHURCH + 人口×K_FAITH_POP」两项都线性于人口，
+// 而人口每时代涨 10~1000 倍、奇迹消耗只涨约 10 倍 → 后期信仰「秒出」，经济失效。
+// 现在改为按时代给出基准产出，人口与教堂只决定「时代内的相对进度」。
+export const FAITH_ERA_BASE = [15, 150, 1500, 15000, 150000];  // 各时代满规模时的信仰/秒（每时代 ×10）
+export const FAITH_FILL_SEC = 100;                              // 满规模下攒满本时代奇迹所需秒数
+// 阻尼系数 = 基准产出 ÷ 原始产出（刚需教堂 0.05×人口 → 原始产出 0.2×人口）
+export const FAITH_ERA_DAMP = FAITH_ERA_BASE.map((b, i)=> b / (0.2 * ERAS[i].popGoal));
+// 奇迹信仰消耗由「基准产出 × 目标秒数」推导，保证每个时代攒满所需时间一致
+export const faithCostOf = (E)=> FAITH_ERA_BASE[E] * FAITH_FILL_SEC;
+
 export const WONDERS = [
-  { name:'巨石阵',   faithCost:100,    time:18, bonus:'全时代信仰+10%' },
-  { name:'金字塔',   faithCost:900,    time:24, bonus:'人口容量+20%' },
-  { name:'大教堂',   faithCost:8000,   time:30, bonus:'信仰产出+30%' },
-  { name:'摩天塔',   faithCost:90000,  time:36, bonus:'人口容量+50%' },
-  { name:'太空电梯', faithCost:900000, time:45, bonus:'通关' },
+  { name:'巨石阵',   faithCost:faithCostOf(0), time:18, bonus:'全时代信仰+10%' },
+  { name:'金字塔',   faithCost:faithCostOf(1), time:24, bonus:'人口容量+20%' },
+  { name:'大教堂',   faithCost:faithCostOf(2), time:30, bonus:'信仰产出+30%' },
+  { name:'摩天塔',   faithCost:faithCostOf(3), time:36, bonus:'人口容量+50%' },
+  { name:'太空电梯', faithCost:faithCostOf(4), time:45, bonus:'通关' },
 ];
 
 // 晨光清新调色（地形 + 天空基线，日照系统会在此基础上叠加日夜）

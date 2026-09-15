@@ -337,22 +337,31 @@ function startGame(){
 
 // R8：周期自动保存 + 离开前保存
 let _autosaveAcc = 0;
+let _autosaveWarned = false;
 const AUTOSAVE_SEC = 180;
 function tryAutosave(dt){
   if(!G.started || G.over || !userKey) return;
   _autosaveAcc += dt;
   if(_autosaveAcc >= AUTOSAVE_SEC){
     _autosaveAcc = 0;
-    try{
-      Saves.writeSave(userKey, 'quick', ()=>serializeState(G), {});
-      console.info('[autosave] quick ok');
-    }catch(e){ console.warn('[autosave] failed', e); }
+    // writeSave 配额/序列化失败时返回 null，必须检查：静默失败会让玩家以为一直在自动存档
+    let ok = false;
+    try{ ok = !!Saves.writeSave(userKey, 'quick', ()=>serializeState(G), {}); }
+    catch(e){ console.warn('[autosave] failed', e); }
+    if(!ok){
+      console.warn('[autosave] quick FAILED (quota / serialize)');
+      if(!_autosaveWarned){
+        _autosaveWarned = true;
+        toast('自动存档失败，请手动保存或导出存档');
+      }
+    }
   }
 }
 
 function loop(now){
   requestAnimationFrame(loop);
-  let dt = (now - last)/1000;
+  const rawDt = (now - last)/1000;
+  let dt = rawDt;
   last = now;
   dt = Math.max(0, Math.min(0.05, dt));
   const gdt = dt * G.speed;
@@ -403,7 +412,31 @@ function loop(now){
   R.updateParticles(dt);
   R.updateNpcs(dt, G);
   R.render();
+  perfTick(rawDt);
   if(!G.paused) G.time += dt;
+}
+
+// ---- 性能读数（仅 ?debug=1 开启，同时写入 window.__perf 供外部探针读取）----
+const PERF_ON = /[?&]debug=1/.test(location.search);
+let perfAcc = 0, perfFrames = 0, perfMaxMs = 0, perfEl = null;
+function perfTick(rawDt){
+  if(!PERF_ON) return;
+  perfAcc += rawDt; perfFrames++;
+  const ms = rawDt * 1000;
+  if(ms > perfMaxMs) perfMaxMs = ms;
+  if(perfAcc < 0.5) return;
+  const fps = perfFrames / perfAcc;
+  const frameMs = perfAcc / perfFrames * 1000;
+  const info = R.renderer.info.render;
+  if(!perfEl) perfEl = document.getElementById('perfHud');
+  if(perfEl){
+    perfEl.classList.remove('hidden');
+    perfEl.textContent =
+      `FPS ${fps.toFixed(0)}   帧 ${frameMs.toFixed(1)}ms   峰值 ${perfMaxMs.toFixed(1)}ms\n` +
+      `DrawCall ${info.calls}   三角面 ${info.triangles}`;
+  }
+  window.__perf = { fps:Math.round(fps), frameMs:+frameMs.toFixed(2), maxMs:+perfMaxMs.toFixed(1), drawCalls:info.calls, triangles:info.triangles };
+  perfAcc = 0; perfFrames = 0; perfMaxMs = 0;
 }
 
 function tick(dt){
@@ -489,7 +522,7 @@ function tick(dt){
   if(wonderChanged) R.syncWorld(G);
 
   const nightBonus = (G.dayTime < 0.22 || G.dayTime > 0.78) ? 1.15 : 1.0;
-  G.faithRate = F.faithPerSec(churches, G.pop) * faithMult(G) * nightBonus;
+  G.faithRate = F.faithPerSec(churches, G.pop, G.era) * faithMult(G) * nightBonus;
   const faithGain = G.faithRate * dt;
   G.faith += faithGain; G.totalFaith += faithGain;
   // R4：信仰禁止为负
@@ -630,9 +663,14 @@ function autoBuild(){
   const indShort = cnt[3] < need[3] || indOut < buildDemand;
   const churchShort = cnt[4] < need[4] || (!G.faithRate || G.faithRate < AUTO.faithPressure);
 
+  // 房屋要求「8 邻域全空」（见 canPlaceZoneAt），农田/工业会先占掉这类空格；
+  // 人口已被住房卡满时若仍先放农田/工业，房屋就再也找不到点位 → 人口永久停滞
+  const housingBlocking = houseShort && foodOk && hc > 0 && G.pop >= hc - 0.5;
+
+  if(housingBlocking) tryPlace(1);
   if(farmShort) tryPlace(2);
   if(indShort) tryPlaceIndustry();
-  if(foodOk && indOk && houseShort) tryPlace(1);
+  if(!housingBlocking && foodOk && indOk && houseShort) tryPlace(1);
   if(churchShort) tryPlace(4);
 
   // 若本轮啥也没建成且住房仍缺，再补一轮房（放宽资源门槛）
@@ -798,7 +836,7 @@ function updateUI(){
   const indN = G._builtCache?.valid ? (G._builtCache[3]||0) : 0;
   const gate = F.gateOf(E);
   const indOut = F.industryPerSec(indN);
-  const gateTxt = `产能${indOut.toFixed(0)}/${Math.ceil(gate)}`;
+  const gateTxt = `进阶门槛 ${indOut.toFixed(0)}/${Math.ceil(gate)}/s`;
   document.getElementById('advReq').textContent =
     `人口 ${Math.floor(G.pop)}/${ERAS[G.era].popGoal} · ${wonder} · ⭐${G.stars}/${ERAS[G.era].starCost} · ${gateTxt} · ${ms}`;
 }
@@ -814,12 +852,14 @@ function toast(msg){
 window.addEventListener('contextmenu', e=>e.preventDefault());
 window.addEventListener('beforeunload', ()=>{
   if(G.started && userKey && !G.over){
-    try{ Saves.writeSave(userKey, 'quick', ()=>serializeState(G), {}); }catch(_){}
+    try{ if(!Saves.writeSave(userKey, 'quick', ()=>serializeState(G), {})) console.warn('[save] 离场保存失败'); }
+    catch(e){ console.warn('[save] 离场保存异常', e); }
   }
 });
 document.addEventListener('visibilitychange', ()=>{
   if(document.visibilityState === 'hidden' && G.started && userKey){
-    try{ Saves.writeSave(userKey, 'quick', ()=>serializeState(G), {}); }catch(_){}
+    try{ if(!Saves.writeSave(userKey, 'quick', ()=>serializeState(G), {})) console.warn('[save] 后台保存失败'); }
+    catch(e){ console.warn('[save] 后台保存异常', e); }
   }
 });
 boot();

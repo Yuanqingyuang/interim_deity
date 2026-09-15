@@ -7,7 +7,7 @@ import {
   TILE, WATER_LEVEL, WILD, FOG_NEAR, FOG_FAR,
   PALETTES, BUILDING_STYLE, ZONES, FOLKCOL, FOLK_HEAD,
   CHURCH_STYLE, FACTORY_STYLE, CHUNK, FARM_CROP, FARM_SOIL, churchStyleForEra, factoryStyleForEra,
-  sampleSun, lerpHex, hash2
+  sampleSun, lerpHex, hash2, mulberry32
 } from './config.js';
 import { cornerColor, heightAt, riverMask, sampleHeight } from './terrain.js';
 import { getTile, eachTile, chunkBounds, tileLive } from './state.js';
@@ -45,12 +45,17 @@ export class Renderer {
     this.sun.position.set(40, 50, 30);
     this.sun.castShadow = true;
     this.sun.shadow.mapSize.set(1024, 1024);
-    const s = 30;
+    this._shadowR = 30;                 // 阴影正交框半径（随城区尺寸更新）
+    this._focus = { x: c, z: c };       // 阴影/日照焦点 = 城区中心
+    const s = this._shadowR;
     this.sun.shadow.camera.left=-s; this.sun.shadow.camera.right=s;
     this.sun.shadow.camera.top=s; this.sun.shadow.camera.bottom=-s;
-    this.sun.shadow.camera.near=1; this.sun.shadow.camera.far=140;
-    this.sun.shadow.bias = -0.0004;
-    this.sun.shadow.normalBias = 0.04;
+    this.sun.shadow.camera.near=1; this.sun.shadow.camera.far=170;
+    // OrthographicCamera 构造时已固化投影矩阵，改完 left/right/top/bottom 必须重算，
+    // 否则生效值仍是默认的 ±5（阴影只覆盖 10×10 世界单位）
+    this.sun.shadow.camera.updateProjectionMatrix();
+    this.sun.shadow.bias = -0.0006;
+    this.sun.shadow.normalBias = 0.03;
     this.scene.add(this.sun);
     this.sunTarget = new THREE.Object3D();
     this.sunTarget.position.set(c,0,c);
@@ -141,7 +146,8 @@ export class Renderer {
     this._wildHeightsMeta = null;
     this._wildInst = null;
     this._skyCanvas = document.createElement('canvas');
-    this._skyCanvas.width = 2; this._skyCanvas.height = 256;
+    // 宽度不能是 2：背景纹理会被拉伸到整个视口，任何 x 方向的像素差都会变成整条横向色带
+    this._skyCanvas.width = 512; this._skyCanvas.height = 256;
     this._raycaster = new THREE.Raycaster();
     this._ndc = new THREE.Vector2();
     this._hit = new THREE.Vector3();
@@ -189,7 +195,7 @@ export class Renderer {
     grad.addColorStop(0.55, `#${c1.getHexString()}`);
     grad.addColorStop(1.0,  `#${c2.getHexString()}`);
     ctx.fillStyle = grad;
-    ctx.fillRect(0, 0, 2, 256);
+    ctx.fillRect(0, 0, cv.width, 256);
 
     const glowC = new THREE.Color(glow);
     const glowGrad = ctx.createLinearGradient(0, 190, 0, 256);
@@ -197,15 +203,16 @@ export class Renderer {
     glowGrad.addColorStop(0, `rgba(${(glowC.r*255|0)},${(glowC.g*255|0)},${(glowC.b*255|0)},0)`);
     glowGrad.addColorStop(1, `rgba(${(glowC.r*255|0)},${(glowC.g*255|0)},${(glowC.b*255|0)},${ga})`);
     ctx.fillStyle = glowGrad;
-    ctx.fillRect(0, 190, 2, 66);
+    ctx.fillRect(0, 190, cv.width, 66);
 
-    // 星空（夜间）
+    // 星空（夜间）：二维分布，避免整行拉伸成横向条纹
     if(dayK < 0.45){
       ctx.fillStyle = `rgba(255,255,255,${0.7*(1-dayK/0.45)})`;
-      for(let i=0;i<40;i++){
-        const sx = (i*37)%2;
-        const sy = (i*i*13)%180;
-        ctx.fillRect(sx, sy, 1, 1);
+      for(let i=0;i<140;i++){
+        const sx = (i*211 + i*i*37) % cv.width;
+        const sy = (i*i*13 + i*7) % 180;
+        const sz = (i%9===0) ? 2 : 1;
+        ctx.fillRect(sx, sy, sz, sz);
       }
     }
 
@@ -242,20 +249,29 @@ export class Renderer {
     cv.width = 256; cv.height = 256;
     const ctx = cv.getContext('2d');
     ctx.clearRect(0,0,256,256);
-    // 软云斑
+    // 云斑必须由种子决定：否则同一 ?seed= 每次刷新天空都不一样
+    const mSeed = /[?&]seed=(\d+)/.exec(location.search);
+    const rand = mulberry32(mSeed ? (mSeed[1]|0) : 1);
+    // 软云斑：每个云斑在 3×3 偏移上重复绘制，保证平铺后接缝处连续（否则 repeat 出现硬边）
     for(let i=0;i<28;i++){
-      const x = Math.random()*256, y = Math.random()*256;
-      const r = 18 + Math.random()*42;
-      const g = ctx.createRadialGradient(x,y,0,x,y,r);
-      g.addColorStop(0, 'rgba(255,255,255,0.55)');
-      g.addColorStop(0.45, 'rgba(255,255,255,0.22)');
-      g.addColorStop(1, 'rgba(255,255,255,0)');
-      ctx.fillStyle = g;
-      ctx.beginPath(); ctx.arc(x,y,r,0,Math.PI*2); ctx.fill();
+      const x = rand()*256, y = rand()*256;
+      const r = 18 + rand()*42;
+      for(let oy=-1; oy<=1; oy++){
+        for(let ox=-1; ox<=1; ox++){
+          const cx = x + ox*256, cy = y + oy*256;
+          if(cx < -r || cx > 256+r || cy < -r || cy > 256+r) continue;
+          const g = ctx.createRadialGradient(cx,cy,0,cx,cy,r);
+          g.addColorStop(0, 'rgba(255,255,255,0.55)');
+          g.addColorStop(0.45, 'rgba(255,255,255,0.22)');
+          g.addColorStop(1, 'rgba(255,255,255,0)');
+          ctx.fillStyle = g;
+          ctx.beginPath(); ctx.arc(cx,cy,r,0,Math.PI*2); ctx.fill();
+        }
+      }
     }
     const tex = new THREE.CanvasTexture(cv);
     tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
-    tex.repeat.set(3,3);
+    tex.repeat.set(5,5);
     tex.colorSpace = THREE.SRGBColorSpace;
     this.cloudTex = tex;
     const geo = new THREE.PlaneGeometry(size, size, 1, 1);
@@ -273,6 +289,8 @@ export class Renderer {
     this.cloudMesh.position.set(c + Math.sin(t*0.02)*6, 34, c + Math.cos(t*0.015)*4);
     if(this.cloudTex) this.cloudTex.offset.set((t*0.004)%1, (t*0.002)%1);
     this.cloudMesh.material.opacity = 0.25 + dayK*0.4;
+    // MeshBasicMaterial 不吃光照：必须手动按昼夜着色，否则入夜后云仍是纯白
+    this.cloudMesh.material.color.setHex(lerpHex(0x435178, 0xfdfdfd, dayK));
   }
 
   // 每帧轻量更新日照（天空每 0.5s 重建即可）
@@ -280,20 +298,21 @@ export class Renderer {
     this.dayTime = dayTime;
     const sun = sampleSun(dayTime);
     const p = PALETTES[era];
-    const c = 0;
+    const c = this._focus.x, cz = this._focus.z;
     const R = 55;
     const elev = Math.max(0.08, sun.elev);
     const x = Math.cos(sun.azim*Math.PI) * R;
     const z = Math.sin(sun.azim*Math.PI) * R;
-    this.sun.position.set(c + x, elev*R*0.9, c + z);
-    this.sunTarget.position.set(c, 0, c);
+    this.sun.position.set(c + x, elev*R*0.9, cz + z);
+    this.sunTarget.position.set(c, 0, cz);
     this.sun.color.setHex(sun.sun);
     this.sun.intensity = sun.inten;
     this.hemi.intensity = sun.hemi;
     this.hemi.color.setHex(lerpHex(0x5a6a9a, 0xd8ecf8, sun.day));
     this.hemi.groundColor.setHex(lerpHex(0x2a3048, 0x7a8a5a, sun.day));
     this.ambient.color.setHex(sun.amb);
-    this.ambient.intensity = 0.32 + sun.day*0.18;
+    // 环境光保底：ACES 会显著压暗低亮度区，夜间原值会让画面接近纯黑
+    this.ambient.intensity = 0.45 + sun.day*0.14;
     // 雾色：夜冷昼暖（夜间不要太深）
     const fogDay = p.fog;
     const fogNight = lerpHex(0x1a2438, p.fog, 0.22);
@@ -332,11 +351,28 @@ export class Renderer {
     return false;
   }
 
+  // 阴影/日照框跟随城区：正交框外的一律没有阴影，必须随区块范围更新
+  _syncShadow(cx, cz, half){
+    this._focus.x = cx; this._focus.z = cz;
+    const R = Math.max(20, Math.min(120, half));
+    if(Math.abs(R - this._shadowR) < 0.5) return;
+    this._shadowR = R;
+    const cam = this.sun.shadow.camera;
+    cam.left = -R; cam.right = R; cam.top = R; cam.bottom = -R;
+    cam.updateProjectionMatrix();
+  }
+
   // ---- 地形 Mesh：已生成区块 + 旷野延伸 ----
   buildTerrain(G){
     const seed = G.seed|0;
     const era = G.era;
     const b = chunkBounds(G);
+    // 城区中心与半径（世界坐标）：阴影框与日照焦点跟随城区而非死锁在原点
+    this._syncShadow(
+      (b.minX + b.maxX) * 0.5 * TILE,
+      (b.minY + b.maxY) * 0.5 * TILE,
+      Math.max(b.maxX - b.minX, b.maxY - b.minY) * 0.5 * TILE + 8
+    );
     const ox = b.minX - WILD, oy = b.minY - WILD;
     const GW = (b.maxX - b.minX + 1) + WILD*2;
     const GH = (b.maxY - b.minY + 1) + WILD*2;
@@ -420,6 +456,7 @@ export class Renderer {
       this.terrainMesh = new THREE.Mesh(new THREE.BufferGeometry(),
         new THREE.MeshStandardMaterial({ vertexColors:true, flatShading:true, roughness:0.95, metalness:0.0 }));
       this.terrainMesh.receiveShadow = true;
+      this.terrainMesh.castShadow = true;   // 地形自身也要投影，否则山体没有自阴影
       this.scene.add(this.terrainMesh);
     }
     const g = new THREE.BufferGeometry();
@@ -569,7 +606,7 @@ export class Renderer {
         depthWrite: false,
         flatShading:false
       }));
-      this.waterMesh.receiveShadow = false;
+      this.waterMesh.receiveShadow = true;   // 水面也要接阴影，否则山影里的湖面依旧发亮
       this.waterMesh.renderOrder = 2;
       const glow = new THREE.Mesh(g.clone(), new THREE.MeshBasicMaterial({
         color: 0x9cc4b8, transparent:true, opacity:0.05, depthWrite:false,
@@ -1012,10 +1049,47 @@ export class Renderer {
       pyr.position.y = 1.1; pyr.rotation.y = Math.PI/4;
       pyr.castShadow = true;
       grp.add(pyr);
+    } else if(era===2){
+      // 大教堂：中殿 + 尖顶 + 双塔（与时代 IV 的塔楼区分）
+      const stone = this._mat(0xc9c2b4);
+      const nave = new THREE.Mesh(new THREE.BoxGeometry(1.8, 1.0, 3.0), stone);
+      nave.position.y = 0.5; nave.castShadow = true; nave.receiveShadow = true;
+      grp.add(nave);
+      const roof = new THREE.Mesh(new THREE.ConeGeometry(1.55, 1.0, 4), this._mat(0x8a6a4a));
+      roof.position.y = 1.5; roof.rotation.y = Math.PI/4;
+      roof.castShadow = true;
+      grp.add(roof);
+      for(const dx of [-0.95, 0.95]){
+        const tw = new THREE.Mesh(new THREE.BoxGeometry(0.5, 1.7, 0.5), stone);
+        tw.position.set(dx, 0.85, -1.2); tw.castShadow = true;
+        grp.add(tw);
+        const sp = new THREE.Mesh(new THREE.ConeGeometry(0.36, 0.9, 4), this._mat(0x6f6a62));
+        sp.position.set(dx, 2.15, -1.2); sp.castShadow = true;
+        grp.add(sp);
+      }
+    } else if(era===3){
+      // 摩天塔：细高多层收分塔楼
+      let y = 0, w = 0.95;
+      for(let i=0;i<4;i++){
+        const seg = new THREE.Mesh(new THREE.BoxGeometry(w, 0.85, w), this._mat(i%2 ? 0x9fb3c8 : 0xb8c6d6));
+        seg.position.y = y + 0.425; seg.castShadow = true;
+        grp.add(seg);
+        y += 0.85; w *= 0.82;
+      }
+      const tip = new THREE.Mesh(new THREE.ConeGeometry(0.22, 1.2, 6), this._mat(0xd9e2ec));
+      tip.position.y = y + 0.6; tip.castShadow = true;
+      grp.add(tip);
     } else {
-      const spire = new THREE.Mesh(new THREE.ConeGeometry(0.9, 3.2, 6), this._mat(0xc8b8a0));
-      spire.position.y = 1.6; spire.castShadow = true;
-      grp.add(spire);
+      // 太空电梯：基座 + 超细塔身 + 顶部光环
+      const base = new THREE.Mesh(new THREE.CylinderGeometry(0.85, 1.05, 0.5, 8), this._mat(0x6f7a86));
+      base.position.y = 0.25; base.castShadow = true;
+      grp.add(base);
+      const mast = new THREE.Mesh(new THREE.CylinderGeometry(0.14, 0.3, 6.0, 6), this._mat(0xb9c6d2));
+      mast.position.y = 3.5; mast.castShadow = true;
+      grp.add(mast);
+      const ring = new THREE.Mesh(new THREE.TorusGeometry(0.55, 0.08, 6, 14), this._mat(0x00e5ff));
+      ring.position.y = 6.6; ring.rotation.x = Math.PI/2; ring.castShadow = true;
+      grp.add(ring);
     }
     return grp;
   }
