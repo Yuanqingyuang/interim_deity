@@ -1,5 +1,5 @@
 // 实习神明 · GameState（无边界稀疏区块）
-import { MINH, DAY_LENGTH, CHUNK, START_CHUNKS, faithCapOf } from './config.js';
+import { MINH, MAXH, DAY_LENGTH, CHUNK, START_CHUNKS, ERAS, faithCapOf } from './config.js';
 import { NUM } from './formulas.js';
 import { logInit, logEncode, logDecode } from './log.js';
 
@@ -225,37 +225,67 @@ export async function serializeStateAsync(G, yieldFn, onProgress, logCap){
   return saveHead(G, chunks, logs);
 }
 
+// ---- S-01：反序列化校验设施（存档可来自导入文件/被篡改的 localStorage，一律按不可信输入处理）----
+const MAX_SAVE_CHUNKS = 4096;   // 4096 区块 = 40.96 万格，远超正常游玩规模
+const MAX_CHUNK_COORD = 4096;   // 区块坐标上限（对应 ±40960 格）
+const MAX_WONDER_LIST = 64;
+const MAX_SAVE_LOGS = 5000;
+const NUM_HI = 1e12;            // 资源类数值上限（防 Infinity/天文数字打爆运算与渲染）
+
+/** 取有限数值并夹到 [lo, hi]，非法值回退 def */
+function num(v, def, lo, hi){
+  const n = typeof v === 'number' ? v : +v;
+  if(!Number.isFinite(n)) return def;
+  return Math.min(hi, Math.max(lo, n));
+}
+function int(v, def, lo, hi){ return Math.floor(num(v, def, lo, hi)); }
+
+function decodeTileInto(t, a){
+  if(Array.isArray(a)){
+    t.h       = num(a[0], MINH, MINH, MAXH);
+    t.water   = int(a[1], 0, 0, 1e6);
+    t.tree    = int(a[2], 0, 0, 1e6);
+    t.zone    = int(a[3], 0, 0, 4);
+    t.prog    = num(a[4], 0, 0, 1);
+    t.built   = !!a[5];
+    t.variant = int(a[6], 0, 0, 1e6);
+  } else if(a != null){
+    t.h = num(a, MINH, MINH, MAXH);
+  }
+  t.live = true;
+}
+
 export function deserializeState(G, data){
-  if(!data) return false;
+  if(!data || typeof data !== 'object') return false;
   // v3 无边界区块
   if(data.v===3 && Array.isArray(data.chunks)){
+    if(data.chunks.length === 0 || data.chunks.length > MAX_SAVE_CHUNKS) return false;
     G.chunks = new Map();
     for(const c of data.chunks){
+      if(!c || typeof c !== 'object' || !Array.isArray(c.tiles)) continue;
+      const cx = int(c.cx, NaN, -MAX_CHUNK_COORD, MAX_CHUNK_COORD);
+      const cy = int(c.cy, NaN, -MAX_CHUNK_COORD, MAX_CHUNK_COORD);
+      if(!Number.isFinite(cx) || !Number.isFinite(cy)) continue;
       const tiles = [];
       for(let ly=0; ly<CHUNK; ly++){
         const row=[];
         for(let lx=0; lx<CHUNK; lx++){
           // 兼容两种编码：数字 = 只存高度的未开发地块；数组 = 完整 7 元组
-          const a = c.tiles?.[ly]?.[lx];
           const t = makeTile();
-          if(Array.isArray(a)){
-            t.h=+a[0]; t.water=a[1]|0; t.tree=a[2]|0; t.zone=a[3]|0;
-            t.prog=+a[4]; t.built=!!a[5]; t.variant=a[6]|0;
-          } else if(a != null){
-            t.h = +a || MINH;
-          }
-          t.live = true;
+          decodeTileInto(t, c.tiles[ly]?.[lx]);
           row.push(t);
         }
         tiles.push(row);
       }
-      G.chunks.set(chunkKey(c.cx|0, c.cy|0), { cx:c.cx|0, cy:c.cy|0, tiles });
+      G.chunks.set(chunkKey(cx, cy), { cx, cy, tiles });
     }
+    if(G.chunks.size === 0) return false;
   } else if(data.v===2 || data.v===1){
     // 旧 40×40 存档：迁到区块
+    if(!Array.isArray(data.tiles)) return false;
     G.chunks = new Map();
-    const oldRows = data.tiles?.length || 0;
-    const oldCols = data.tiles?.[0]?.length || 0;
+    const oldRows = Math.min(data.tiles.length, 1024);
+    const oldCols = Math.min(Array.isArray(data.tiles[0]) ? data.tiles[0].length : 0, 1024);
     for(let y=0;y<oldRows;y++)
       for(let x=0;x<oldCols;x++){
         const a = data.tiles[y][x];
@@ -263,10 +293,7 @@ export function deserializeState(G, data){
         const k = chunkKey(cx,cy);
         if(!G.chunks.has(k)) G.chunks.set(k, { cx, cy, tiles: makeChunkTiles() });
         const t = getTile(G,x,y);
-        if(t){
-          t.h=+a[0]; t.water=a[1]|0; t.tree=a[2]|0; t.zone=a[3]|0;
-          t.prog=+a[4]; t.built=!!a[5]; t.variant=a[6]|0; t.live=true;
-        }
+        if(t) decodeTileInto(t, a);
       }
     // 补一圈
     const keys = [...G.chunks.keys()];
@@ -280,32 +307,45 @@ export function deserializeState(G, data){
     }
   } else return false;
 
-  G.seed = data.seed|0;
-  G.era = data.era|0;
-  G.speed = data.speed|0;
+  G.seed = int(data.seed, 0, -2147483648, 2147483647);
+  G.era = int(data.era, 0, 0, ERAS.length - 1);
+  const spd = int(data.speed, 2, 0, 8);
+  G.speed = (spd===1 || spd===2 || spd===4) ? spd : 2;
   G.over = !!data.over;
-  G.power = +data.power || 0;
-  G.faith = +data.faith || 0;
+  G.power = num(data.power, 0, 0, NUM_HI);
+  G.faith = num(data.faith, 0, 0, NUM_HI);
   // 旧存档可能已囤积巨量信仰（旧版本无上限），读档时按当前时代上限收敛
   const fcap = faithCapOf(G.era);
   if(G.faith > fcap) G.faith = fcap;
-  G.totalFaith = +data.totalFaith || 0;
-  G.pop = +data.pop || 20;
-  G.stars = data.stars|0;
-  G.starProg = +data.starProg || 0;
-  G.starMilestones = (data.starMilestones||[[0,0,0],[0,0,0],[0,0,0],[0,0,0],[0,0,0]])
-    .map(arr => (arr||[0,0,0]).map(v=>!!v));
-  while(G.starMilestones.length < 5) G.starMilestones.push([false,false,false]);
-  G.dayTime = +data.dayTime || 0.35;
-  G.time = +data.time || 0;
-  G.wonders = (data.wonders||[0,0,0,0,0]).map(v=>!!v);
-  G.wonderList = (data.wonderList||[]).map(w=>({
-    era:w.era|0, x:w.x|0, y:w.y|0, prog:+w.prog||0, done:!!w.done
-  }));
-  G.boostGrow = +data.boostGrow||0;
-  G.boostBuild = +data.boostBuild||0;
-  G.boostRain = +data.boostRain||0;
-  G.logs = logDecode(data.logs);
+  G.totalFaith = num(data.totalFaith, 0, 0, NUM_HI);
+  G.pop = num(data.pop, 20, 0, NUM_HI);
+  G.stars = int(data.stars, 0, 0, 1e6);
+  G.starProg = num(data.starProg, 0, 0, NUM_HI);
+  const msIn = Array.isArray(data.starMilestones) ? data.starMilestones : [];
+  G.starMilestones = [];
+  for(let e=0; e<5; e++){
+    const row = Array.isArray(msIn[e]) ? msIn[e] : [];
+    G.starMilestones.push([!!row[0], !!row[1], !!row[2]]);
+  }
+  const dt = num(data.dayTime, 0.35, -1, 2);
+  G.dayTime = ((dt % 1) + 1) % 1;
+  G.time = num(data.time, 0, 0, NUM_HI);
+  const wIn = Array.isArray(data.wonders) ? data.wonders : [];
+  G.wonders = [!!wIn[0], !!wIn[1], !!wIn[2], !!wIn[3], !!wIn[4]];
+  G.wonderList = (Array.isArray(data.wonderList) ? data.wonderList : [])
+    .slice(0, MAX_WONDER_LIST)
+    .filter(w => w && typeof w === 'object')
+    .map(w=>({
+      era: int(w.era, 0, 0, ERAS.length - 1),
+      x: int(w.x, 0, -1e5, 1e5),
+      y: int(w.y, 0, -1e5, 1e5),
+      prog: num(w.prog, 0, 0, 1),
+      done: !!w.done
+    }));
+  G.boostGrow = num(data.boostGrow, 0, 0, 1e6);
+  G.boostBuild = num(data.boostBuild, 0, 0, 1e6);
+  G.boostRain = num(data.boostRain, 0, 0, 1e6);
+  G.logs = logDecode(Array.isArray(data.logs) ? data.logs.slice(-MAX_SAVE_LOGS) : []);
   G.autoLog = [];
   G.terrainDirty = true;
   G.started = true;

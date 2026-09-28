@@ -1,6 +1,7 @@
 // 实习神明 · 主循环
 import { TILE, MIRACLES, WONDERS, ERAS, AUTO, TOOLS, MILESTONES, ZONES,
-  powerMaxOf, powerRegenOf, faithCapOf, sampleSun } from './config.js';
+  powerMaxOf, powerRegenOf, faithCapOf, sampleSun,
+  APP_VERSION, AUTOSAVE_SEC, EXIT_SAVE_MIN_MS } from './config.js';
 import { createState, housingCap, faithMult, serializeState, serializeStateAsync, deserializeState,
   refreshBuiltCache, invalidateBuiltCache, getTile, eachTile } from './state.js';
 import { genWorld, applyTool, findAutoSite, placeDistrict, placeIndustryBatch, clearTreesNearZones, ensureChunkRing,
@@ -20,8 +21,17 @@ let uiAcc = 0;
 let entitySyncAcc = 0;
 let skyAcc = 0;
 let paintRebuildAcc = 0;
+let idleRebuildAcc = 999;
 let saveDialogMode = 'load';
+let saveDialogAct = null;
 let userKey = null;
+
+// G-07：重开世界时保留现有 query（如 debug=1），只替换 seed
+function newWorldUrl(){
+  const q = new URLSearchParams(location.search);
+  q.set('seed', String((Math.random()*1e9)|0));
+  return location.pathname + '?' + q.toString();
+}
 
 function ensureBuiltCache(){
   if(!G._builtCache || !G._builtCache.valid) refreshBuiltCache(G);
@@ -35,9 +45,16 @@ function boot(){
   } catch(err){
     console.error('WebGL 初始化失败:', err);
     document.getElementById('loader').classList.add('hidden');
+    // A-03：兜底提示改 DOM 构建（原 innerHTML 拼接属不必要的注入面）
     const notice = document.createElement('div');
     notice.style.cssText = 'position:fixed;inset:0;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:10px;background:#0d1117;color:#e0aa66;z-index:70;text-align:center;padding:24px;';
-    notice.innerHTML = '<div style="font-size:20px;letter-spacing:3px;">当前环境不支持 WebGL</div><div style="color:#9aa0a6;font-size:13px;max-width:420px;line-height:1.7;">请在支持 WebGL 的浏览器中打开本页面。</div>';
+    const h = document.createElement('div');
+    h.style.cssText = 'font-size:20px;letter-spacing:3px;';
+    h.textContent = '当前环境不支持 WebGL';
+    const p = document.createElement('div');
+    p.style.cssText = 'color:#9aa0a6;font-size:13px;max-width:420px;line-height:1.7;';
+    p.textContent = '请在支持 WebGL 的浏览器中打开本页面。';
+    notice.append(h, p);
     document.body.appendChild(notice);
     return;
   }
@@ -76,7 +93,7 @@ function boot(){
     onAdvance:()=>advanceEra(),
     onStart:()=>startGame(),
     onRestart:()=>location.reload(),
-    onNewWorld:()=>{ location.href = location.pathname + '?seed=' + ((Math.random()*1e9)|0); },
+    onNewWorld:()=>{ location.href = newWorldUrl(); },
     onAuth:()=>doAuth(),
     onNewGame:()=>newGame(),
     onLogout:()=>doLogout(),
@@ -99,10 +116,12 @@ function boot(){
     },
     onImportSave:(json, slot)=>{
       if(!userKey){ toast('请先登录'); return false; }
-      const ok = Saves.importSaveJson(userKey, slot || 'quick', json);
-      toast(ok ? '导入成功，可读取该槽位' : '导入失败');
+      const s = slot || 'quick';
+      const ok = Saves.importSaveJson(userKey, s, json);
+      toast(ok ? `导入成功 → ${Saves.SLOT_LABEL[s] || s}，可读取该槽位` : '导入失败');
       return ok;
     },
+    onRefreshSaves:()=>refreshSaveDialog(),
     onToast:(m)=>toast(m),
     onToggleLog:()=>toggleLog(),
     onCanvasDown:(px,py,b)=>handleDown(px,py,b),
@@ -203,7 +222,7 @@ function doLogout(){
 function newGame(){
   if(!userKey){ toast('请先登录'); ui.showScreen('auth'); return; }
   sessionStorage.setItem('td_boot', 'new');
-  location.href = location.pathname + '?seed=' + ((Math.random()*1e9)|0);
+  location.href = newWorldUrl();
 }
 
 function openPause(){
@@ -232,6 +251,9 @@ function toMenu(){
 }
 
 let _saving = false;
+// S-05：离场路径节流。_lastSaveOk = 最近一次成功写档（手动/自动/离场）时间戳；
+// beforeunload 距上次成功写档 < EXIT_SAVE_MIN_MS（config.js）时跳过同步写，避免每次关页都全量序列化阻塞。
+let _lastSaveOk = 0;
 
 /** 方案 A：none | rotate | pan */
 function setCamMode(mode){
@@ -252,6 +274,7 @@ async function doSave(slot){
       { onProgress: p=>toast(`保存中… ${p.pct}%`) },
     );
     if(meta){
+      _lastSaveOk = Date.now();
       logPush(G, 80, 0, 0);
       const s = meta._stats;
       const trim = s.trimTry > 0 ? ` · 日志裁剪至${s.logs}条` : '';
@@ -307,16 +330,24 @@ function quickLoad(){
 function openSaveDialog(mode){
   if(!userKey){ toast('请先登录'); return; }
   saveDialogMode = mode;
-  const act = (slot)=>{
+  saveDialogAct = (slot)=>{
     if(mode==='save'){
       doSave(slot);
-      ui.renderSaveSlots(Saves.listSaves(userKey), 'save', act);
+      ui.renderSaveSlots(Saves.listSaves(userKey), 'save', saveDialogAct);
     } else {
       doLoad(slot);
     }
   };
-  ui.renderSaveSlots(Saves.listSaves(userKey), mode, act);
+  ui.renderSaveSlots(Saves.listSaves(userKey), mode, saveDialogAct);
   ui.showScreen('save');
+}
+
+// G-05：存档对话框打开期间数据变化（导入/保存）后重新渲染槽位列表
+function refreshSaveDialog(){
+  if(!userKey || !saveDialogAct) return;
+  const dlg = document.getElementById('saveDialog');
+  if(!dlg || dlg.classList.contains('hidden')) return;
+  ui.renderSaveSlots(Saves.listSaves(userKey), saveDialogMode, saveDialogAct);
 }
 
 function toggleLog(){
@@ -354,7 +385,7 @@ function startGame(){
 let _autosaveAcc = 0;
 let _autosaveWarned = false;
 let _autosaveBusy = false;
-const AUTOSAVE_SEC = 180;
+// AUTOSAVE_SEC 已收口至 config.js（A-02）
 // #2 存档卡死：自动存档改走异步分块路径，不再在 tick 里同步 stringify/setItem 卡帧
 function tryAutosave(dt){
   if(!G.started || G.over || !userKey) return;
@@ -369,7 +400,7 @@ function tryAutosave(dt){
     (logCap, yieldFn, onProgress)=>serializeStateAsync(G, yieldFn, onProgress, logCap),
     {},
   ).then(meta=>{
-    if(meta) return;
+    if(meta){ _lastSaveOk = Date.now(); return; }
     console.warn('[autosave] quick FAILED (quota / serialize)');
     if(!_autosaveWarned){
       _autosaveWarned = true;
@@ -401,8 +432,13 @@ function loop(now){
     if(uiAcc > 0.12){ updateUI(); uiAcc = 0; }
   }
 
-  G.dayTime = (G.dayTime + dt / G.dayLength) % 1;
-  skyAcc += dt;
+  // G-01 修复：统一暂停语义。原先只有 G.time 受 G.paused 门控，dayTime 却持续推进，
+  // 导致暂停菜单里昼夜照常循环、NPC/粒子照走 —— 「暂停」名不副实且两套时钟语义分裂。
+  // 现在暂停时世界时钟（dayTime / G.time）与动画（NPC / 粒子 / 天空重建）一并冻结，
+  // 仅保留相机操作与渲染，方便玩家在暂停时观察场景。
+  const wdt = G.paused ? 0 : dt;
+  G.dayTime = (G.dayTime + wdt / G.dayLength) % 1;
+  skyAcc += wdt;
   if(skyAcc > 0.5){
     skyAcc = 0;
     R._buildSkyTexture(G.era, G.dayTime);
@@ -424,20 +460,25 @@ function loop(now){
       }
     }
   } else if(R.terrainDirty || G.terrainDirty){
-    paintRebuildAcc = 0;
-    R.buildTerrain(G);
-    G.terrainDirty = false;
-    R.terrainDirty = false;
-    R.syncWorld(G);
-    entitySyncAcc = 0;
+    // 非绘制期也节流：自动建造/树木生长会高频置脏，逐帧全量重建是卡顿主源
+    idleRebuildAcc += dt;
+    if(idleRebuildAcc >= 0.15){
+      idleRebuildAcc = 0;
+      paintRebuildAcc = 0;
+      R.buildTerrain(G);
+      G.terrainDirty = false;
+      R.terrainDirty = false;
+      R.syncWorld(G);
+      entitySyncAcc = 0;
+    }
   }
   R.updateCameraKeys?.(dt);
   R.updateWater(G.time);
-  R.updateParticles(dt);
-  R.updateNpcs(dt, G);
+  R.updateParticles(wdt);
+  R.updateNpcs(wdt, G);
   R.render();
   perfTick(rawDt);
-  if(!G.paused) G.time += dt;
+  G.time += wdt;
 }
 
 // ---- 性能读数（仅 ?debug=1 开启，同时写入 window.__perf 供外部探针读取）----
@@ -621,7 +662,9 @@ function autoBuild(){
   for(const z of [1,2,3,4]){
     const lo = F.buildingLow(E, z);
     const hi = F.buildingHigh(E, z);
-    need[z] = cnt[z] < lo ? lo : Math.min(hi, cnt[z] + 2);
+    // S-04 修复：原 `cnt[z] + 2` 形成棘轮（need 恒 > cnt），farmShort/indShort/churchShort
+    // 恒真 → autoBuild 无条件刷到 hi 水位。达标（cnt ≥ lo）后 need = cnt，缺口判定归零。
+    need[z] = cnt[z] < lo ? lo : Math.min(hi, cnt[z]);
   }
 
   // R-review：供需与 tick 一致，按「已建成」计
@@ -852,8 +895,21 @@ function handleDown(px, py, button){
   G.hover = cell;
   G.painting = true;
   // 单击立刻放一格；拖动由 loop 连续 applyTool
-  applyTool(G, cell[0], cell[1], 0.05);
+  // G-06：单击失败给出原因提示（拖动路径靠悬停环配色反馈，不弹 toast 防刷屏）
+  const r = applyTool(G, cell[0], cell[1], 0.05);
+  if(r && r !== 'ok') toast(TOOL_FAIL_MSG[r] || '无法在此操作');
 }
+
+// G-06：applyTool 失败原因码 → 玩家可读提示
+const TOOL_FAIL_MSG = {
+  power: '神力不足',
+  out: '超出地图范围',
+  water: '水面不能划定分区',
+  occupied: '该地块已有分区',
+  height: '地形过高或过低，无法划定',
+  blocked: '不满足放置条件',
+  empty: '这里没有可拆除的分区',
+};
 
 // #24：光标随工具切换（笔刷 / 拆除 / 镜头）
 function updateCursor(){
@@ -952,18 +1008,58 @@ function toast(msg){
 }
 
 window.addEventListener('contextmenu', e=>e.preventDefault());
-// 离场/后台保存必须当场写完，无法 await ⇒ 保留同步 writeSave；
-// 它会 bump 槽位序号，使在飞的异步写档自动放弃提交（最新者获胜）
+// S-05 修复（离场路径阻塞）：
+// · beforeunload 无法 await ⇒ 仍走同步 writeSave，但加节流：距上次成功写档 < 15s 直接跳过，
+//   避免每次关页/刷新都全量序列化（大图数 MB，同步 stringify+setItem 可达秒级）阻塞卸载；
+//   同步写会 bump 槽位序号，使在飞的异步写自动放弃提交（最新者获胜），无需互斥。
+// · visibilitychange(hidden) 改走异步分块写：页面转后台后通常仍存活足够时间完成分块写档，
+//   不再阻塞渲染线程；若随后真卸载，beforeunload 的同步写会以更高序号接管。
 window.addEventListener('beforeunload', ()=>{
-  if(G.started && userKey && !G.over){
-    try{ if(!Saves.writeSave(userKey, 'quick', ()=>serializeState(G), {})) console.warn('[save] 离场保存失败'); }
-    catch(e){ console.warn('[save] 离场保存异常', e); }
-  }
+  if(!(G.started && userKey && !G.over)) return;
+  if(Date.now() - _lastSaveOk < EXIT_SAVE_MIN_MS) return;
+  try{
+    if(Saves.writeSave(userKey, 'quick', ()=>serializeState(G), {})) _lastSaveOk = Date.now();
+    else console.warn('[save] 离场保存失败');
+  }catch(e){ console.warn('[save] 离场保存异常', e); }
 });
+let _bgSaveBusy = false;
 document.addEventListener('visibilitychange', ()=>{
-  if(document.visibilityState === 'hidden' && G.started && userKey){
-    try{ if(!Saves.writeSave(userKey, 'quick', ()=>serializeState(G), {})) console.warn('[save] 后台保存失败'); }
-    catch(e){ console.warn('[save] 后台保存异常', e); }
-  }
+  if(document.visibilityState !== 'hidden') return;
+  if(!(G.started && userKey && !G.over)) return;
+  if(_saving || _bgSaveBusy) return;
+  _bgSaveBusy = true;
+  Saves.writeSaveAsync(
+    userKey, 'quick',
+    (logCap, yieldFn, onProgress)=>serializeStateAsync(G, yieldFn, onProgress, logCap),
+    {},
+  ).then(meta=>{
+    if(meta) _lastSaveOk = Date.now();
+    else console.warn('[save] 后台保存失败');
+  }).catch(e=>console.warn('[save] 后台保存异常', e))
+    .finally(()=>{ _bgSaveBusy = false; });
 });
+
+// A-03：全局错误兜底。未捕获异常/Promise 拒绝原本只进控制台，玩家看到的是「游戏无响应」；
+// 现在给出可见提示（toast），并保留控制台细节便于排查。toast 内部自带 2.2s 自动消失与去抖。
+let _errToastAcc = 0;
+window.addEventListener('error', (e)=>{
+  console.error('[fatal]', e.error || e.message);
+  const now = Date.now();
+  if(now - _errToastAcc > 3000){ _errToastAcc = now; toast('出现异常，已记录到控制台（F12）'); }
+});
+window.addEventListener('unhandledrejection', (e)=>{
+  console.error('[unhandledrejection]', e.reason);
+  const now = Date.now();
+  if(now - _errToastAcc > 3000){ _errToastAcc = now; toast('后台任务异常，已记录到控制台（F12）'); }
+});
+
+// A-05：版本标识——控制台 + 登录/主菜单角标，便于玩家反馈与问题定位
+console.info(`实习神明 v${APP_VERSION}`);
+function mountVersionTag(){
+  for(const el of document.querySelectorAll('.ver-tag')) el.textContent = `v${APP_VERSION}`;
+  // A-04：装饰性 emoji 图标对读屏器无意义，统一隐藏（按钮语义由 aria-label/文本承担）
+  for(const el of document.querySelectorAll('.ico,.t-ico,.m-ico,.g-caret')) el.setAttribute('aria-hidden', 'true');
+}
+mountVersionTag();
+
 boot();

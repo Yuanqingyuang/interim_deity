@@ -9,6 +9,21 @@ export const SLOT_LABEL = {
 
 function slotKey(userKey, slot){ return `${PREFIX}${userKey}/${slot}`; }
 
+/**
+ * C-01：meta 白名单消毒。存档可来自导入文件（不可信），meta 字段会进入 UI 展示，
+ * 这里只保留预期字段并强制预期类型，杜绝脚本注入与类型混淆。
+ */
+export function sanitizeMeta(m){
+  if(!m || typeof m !== 'object') return null;
+  const name = typeof m.name === 'string' ? m.name.slice(0, 40) : '';
+  const seed = Number.isFinite(m.seed) ? m.seed|0 : 0;
+  const era = Number.isFinite(m.era) ? Math.max(0, Math.min(4, m.era|0)) : 0;
+  const pop = Number.isFinite(m.pop) ? Math.max(0, Math.floor(m.pop)) : 0;
+  const savedAt = Number.isFinite(m.savedAt) ? m.savedAt : Date.now();
+  const v = Number.isFinite(m.v) ? m.v|0 : 0;
+  return { name, seed, era, pop, savedAt, v };
+}
+
 export function listSaves(userKey){
   const out = {};
   for(const s of SLOTS){
@@ -22,7 +37,7 @@ export function readMeta(userKey, slot){
     const raw = localStorage.getItem(slotKey(userKey, slot));
     if(!raw) return null;
     const o = JSON.parse(raw);
-    return o?.meta || null;
+    return sanitizeMeta(o?.meta);
   }catch{ return null; }
 }
 
@@ -225,14 +240,16 @@ export function exportSaveJson(userKey, slot){
   return raw;
 }
 
-/** R11：导入 JSON 到槽位（校验 meta/body） */
+/** R11：导入 JSON 到槽位（校验 meta/body；meta 经白名单消毒后重写，防止携带恶意字段入库） */
 export function importSaveJson(userKey, slot, json){
   let o;
   try{ o = JSON.parse(json); }catch{ return false; }
-  if(!o || !o.body || !o.meta) return false;
-  if(!o.body.v || !Array.isArray(o.body.chunks)) return false;
+  if(!o || typeof o !== 'object' || !o.body || typeof o.body !== 'object') return false;
+  if(!Number.isFinite(o.body.v) || !o.body.v || !Array.isArray(o.body.chunks)) return false;
+  const meta = sanitizeMeta(o.meta);
+  if(!meta) return false;
   try{
-    localStorage.setItem(slotKey(userKey, slot), JSON.stringify(o));
+    localStorage.setItem(slotKey(userKey, slot), JSON.stringify({ meta, body: o.body }));
     return true;
   }catch{ return false; }
 }

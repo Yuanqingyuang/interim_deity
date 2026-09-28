@@ -7,7 +7,7 @@ import {
   TILE, WATER_LEVEL, WILD, FOG_NEAR, FOG_FAR,
   PALETTES, BUILDING_STYLE, ZONES, FOLKCOL, FOLK_HEAD,
   CHURCH_STYLE, FACTORY_STYLE, CHUNK, FARM_CROP, FARM_SOIL, churchStyleForEra, factoryStyleForEra,
-  sampleSun, lerpHex, hash2, mulberry32
+  sampleSun, lerpHex, hash2, mulberry32, MAX_BUILD_MESH
 } from './config.js';
 import { cornerColor, heightAt, riverMask, sampleHeight } from './terrain.js';
 import { getTile, eachTile, chunkBounds, tileLive } from './state.js';
@@ -144,6 +144,13 @@ export class Renderer {
     this._matCache = new Map();
     this._wildHeights = null;
     this._wildHeightsMeta = null;
+    this._terrainBufMeta = null;
+    this._terrainPos = null;
+    this._terrainCol = null;
+    this._terrainCorner = null;
+    this._terrainIdx = null;
+    this._terrainIdxMeta = null;
+    this._terrainGeoMeta = null;
     this._wildInst = null;
     this._skyCanvas = document.createElement('canvas');
     // 宽度不能是 2：背景纹理会被拉伸到整个视口，任何 x 方向的像素差都会变成整条横向色带
@@ -230,12 +237,30 @@ export class Renderer {
     if(this._wildHeights && this._wildHeightsMeta === meta) return;
     const n = W * H;
     const heights = new Float32Array(n);
+    // 增量重建：种子不变且旧网格是新网格的子矩形时，直接拷贝旧值，
+    // 只对新增环带跑 sampleHeight（全量重噪声在边界每扩一格时要重算数十万点）
+    let prevX0 = 0, prevY0 = 0, prevX1 = -1, prevY1 = -1;
+    const prev = this._wildHeights, pm = this._wildHeightsMeta;
+    if(prev && pm){
+      const parts = pm.split('|');
+      const ps = parts[0]|0, pox = parts[1]|0, poy = parts[2]|0, pW = parts[3]|0, pH = parts[4]|0;
+      if(ps === seed && prev.length === pW*pH
+        && pox >= ox && poy >= oy && pox + pW <= ox + W && poy + pH <= oy + H){
+        for(let gy=0; gy<pH; gy++){
+          const dst = (poy - oy + gy) * W + (pox - ox);
+          heights.set(prev.subarray(gy*pW, gy*pW + pW), dst);
+        }
+        prevX0 = pox - ox; prevY0 = poy - oy;
+        prevX1 = prevX0 + pW - 1; prevY1 = prevY0 + pH - 1;
+      }
+    }
     for(let gy=0; gy<H; gy++){
+      const inPrevRow = gy >= prevY0 && gy <= prevY1;
       for(let gx=0; gx<W; gx++){
+        if(inPrevRow && gx >= prevX0 && gx <= prevX1) continue;
         const wx = ox + gx - 1;
         const wy = oy + gy - 1;
-        let h = sampleHeight(wx, wy, seed);
-        heights[gy*W+gx] = h;
+        heights[gy*W+gx] = sampleHeight(wx, wy, seed);
       }
     }
     this._wildHeights = heights;
@@ -379,8 +404,16 @@ export class Renderer {
     const W = GW+1, H = GH+1;
     this._ensureWildHeights(seed, ox, oy, W, H);
     const wildH = this._wildHeights;
-    const positions = new Float32Array(W*H*3);
-    const colors = new Float32Array(W*H*3);
+    // 缓冲复用：尺寸不变时不再每帧重建时新分配数百 KB 的 TypedArray（GC 压力主源）
+    const bufMeta = `${W}|${H}`;
+    if(this._terrainBufMeta !== bufMeta){
+      this._terrainPos = new Float32Array(W*H*3);
+      this._terrainCol = new Float32Array(W*H*3);
+      this._terrainCorner = new Float32Array(W*H);
+      this._terrainBufMeta = bufMeta;
+    }
+    const positions = this._terrainPos;
+    const colors = this._terrainCol;
 
     const heightOf = (wx, wy)=>{
       const t = getTile(G, wx, wy);
@@ -408,7 +441,7 @@ export class Renderer {
     };
 
     // 先算所有角点高度一次，颜色阶段复用
-    const cornerHeights = new Float32Array(W*H);
+    const cornerHeights = this._terrainCorner;
     for(let gy=0; gy<H; gy++){
       for(let gx=0; gx<W; gx++){
         cornerHeights[gy*W+gx] = cornerH(gx, gy);
@@ -442,30 +475,42 @@ export class Renderer {
       }
     }
 
-    const indices = [];
-    for(let gy=0; gy<H-1; gy++){
-      for(let gx=0; gx<W-1; gx++){
-        const a = gy*W+gx, b=gy*W+gx+1, c=(gy+1)*W+gx, d=(gy+1)*W+gx+1;
-        indices.push(a, c, b,  b, c, d);
+    // 索引拓扑只由 W/H 决定：缓存为 Uint32Array，尺寸不变时零分配（原 push 普通数组每次重建 ~2MB）
+    if(this._terrainIdxMeta !== bufMeta || !this._terrainIdx){
+      const idx = new Uint32Array((W-1)*(H-1)*6);
+      let p = 0;
+      for(let gy=0; gy<H-1; gy++){
+        for(let gx=0; gx<W-1; gx++){
+          const a = gy*W+gx, b=gy*W+gx+1, c=(gy+1)*W+gx, d=(gy+1)*W+gx+1;
+          idx[p++]=a; idx[p++]=c; idx[p++]=b; idx[p++]=b; idx[p++]=c; idx[p++]=d;
+        }
       }
+      this._terrainIdx = idx;
+      this._terrainIdxMeta = bufMeta;
     }
 
-    if(this.terrainMesh){
-      this.terrainMesh.geometry.dispose();
-    } else {
+    const geoMeta = bufMeta;
+    if(!this.terrainMesh){
       this.terrainMesh = new THREE.Mesh(new THREE.BufferGeometry(),
         new THREE.MeshStandardMaterial({ vertexColors:true, flatShading:true, roughness:0.95, metalness:0.0 }));
       this.terrainMesh.receiveShadow = true;
       this.terrainMesh.castShadow = true;   // 地形自身也要投影，否则山体没有自阴影
       this.scene.add(this.terrainMesh);
     }
-    const g = new THREE.BufferGeometry();
-    g.setAttribute('position', new THREE.BufferAttribute(positions,3));
-    g.setAttribute('color', new THREE.BufferAttribute(colors,3));
-    g.setIndex(indices);
+    const g = this.terrainMesh.geometry;
+    if(this._terrainGeoMeta !== geoMeta){
+      // 尺寸变化（城区扩张）才重建 GPU 缓冲；否则原地更新，避免 dispose/上传抖动
+      g.dispose();
+      g.setAttribute('position', new THREE.BufferAttribute(positions,3));
+      g.setAttribute('color', new THREE.BufferAttribute(colors,3));
+      g.setIndex(new THREE.BufferAttribute(this._terrainIdx,1));
+      this._terrainGeoMeta = geoMeta;
+    } else {
+      g.getAttribute('position').needsUpdate = true;
+      g.getAttribute('color').needsUpdate = true;
+    }
     g.computeVertexNormals();
     g.computeBoundingSphere();
-    this.terrainMesh.geometry = g;
 
     // 旷野装饰：低频重建（时代切换/初始化），避免刷地形时卡顿
     if(!this._wildBuilt || this._wildEra !== era){
@@ -576,15 +621,18 @@ export class Renderer {
       const ctx = cv.getContext('2d');
       ctx.fillStyle = '#000';
       ctx.fillRect(0,0,128,128);
+      // G-10 修复：焦散纹理原用裸 Math.random，每次重建花纹都不同，
+      // 破坏「同种子 → 同世界」的确定性约定；改为世界种子派生的 mulberry32。
+      const wrand = mulberry32(((G.seed|0) || 1) ^ 0x5eed1);
       for(let i=0;i<56;i++){
-        const x = Math.random()*128, y = Math.random()*128;
-        const rx = 3 + Math.random()*16, ry = 1.2 + Math.random()*3.5;
+        const x = wrand()*128, y = wrand()*128;
+        const rx = 3 + wrand()*16, ry = 1.2 + wrand()*3.5;
         const g2 = ctx.createRadialGradient(x,y,0,x,y,rx);
         g2.addColorStop(0, 'rgba(255,255,255,0.45)');
         g2.addColorStop(1, 'rgba(255,255,255,0)');
         ctx.save();
         ctx.translate(x,y);
-        ctx.rotate((Math.random()-0.5)*0.8);
+        ctx.rotate((wrand()-0.5)*0.8);
         ctx.scale(1, ry/rx);
         ctx.translate(-x,-y);
         ctx.fillStyle = g2;
@@ -1095,8 +1143,7 @@ export class Renderer {
   }
 
   syncWorld(G){
-    // 建筑 / 农田（视觉上限：超过后抽样代表格，逻辑数不变）
-    const MAX_BUILD_MESH = 420;
+    // 建筑 / 农田（视觉上限：超过后抽样代表格，逻辑数不变；MAX_BUILD_MESH 已收口至 config.js，A-02）
     // #25 性能：抽样步长依赖「划定总数」，优先取划定缓存，避免为它再全图扫一趟
     let zoneCount = 0;
     const zc = G._zoneCache;
@@ -1162,8 +1209,14 @@ export class Renderer {
     }
 
     // 奇迹
+    // G-09 修复：原实现只增不删——读档换世界 / 奇迹从 wonderList 移除后，
+    // 旧网格永远滞留在 wonderGroup 与 wonderMeshes 中（几何体一并泄漏）。
+    // 参照 building/tree 的 seen 清理协议，移除项需释放内联几何体；
+    // 材质来自 _matCache 共享池，不可 dispose。
+    const seenW = new Set();
     for(const w of G.wonderList){
       const key = `w${w.x},${w.y}`;
+      seenW.add(key);
       if(!this.wonderMeshes.has(key)){
         const m = this.makeWonder(w.era, w.prog);
         this.wonderGroup.add(m); this.wonderMeshes.set(key,m);
@@ -1178,6 +1231,22 @@ export class Renderer {
         m.scale.setScalar(0.3 + prog*0.7);
       }
     }
+    for(const [key, m] of this.wonderMeshes){
+      if(!seenW.has(key)){
+        this.wonderGroup.remove(m);
+        this._disposeInlineGeo(m);
+        this.wonderMeshes.delete(key);
+      }
+    }
+  }
+
+  // G-09 配套：释放组合网格中「非共享」的几何体（makeWonder 各时代分支内联 new 的几何）。
+  // 共享几何（this._geo.*）与缓存材质（_matCache）仍被其他网格使用，严禁 dispose。
+  _disposeInlineGeo(root){
+    const shared = new Set(Object.values(this._geo));
+    root.traverse((o)=>{
+      if(o.isMesh && o.geometry && !shared.has(o.geometry)) o.geometry.dispose();
+    });
   }
 
   spawnBurst(x, z, color, count=14){

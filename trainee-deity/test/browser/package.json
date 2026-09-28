@@ -1,0 +1,18 @@
+{
+  "name": "trainee-deity-browser-tests",
+  "version": "1.1.0",
+  "private": true,
+  "type": "module",
+  "description": "《实习神明》浏览器端回归测试（Playwright）。需先 npm install，再在仓库根目录起静态服务后运行。",
+  "scripts": {
+    "game": "node game-test.mjs",
+    "security": "node security-test.mjs",
+    "leak": "node leak-test.mjs",
+    "boot": "node boot-timing.mjs",
+    "unload": "node unload-test.mjs",
+    "all": "node game-test.mjs && node security-test.mjs && node leak-test.mjs && node boot-timing.mjs && node unload-test.mjs"
+  },
+  "dependencies": {
+    "playwright-core": "^1.63.0"
+  }
+}

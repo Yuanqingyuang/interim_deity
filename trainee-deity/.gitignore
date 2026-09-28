@@ -1,0 +1,10 @@
+# 依赖
+node_modules/
+
+# 浏览器测试产物（截图 / 结果 JSON）
+test/browser/node_modules/
+td-browser-out/
+
+# 系统与编辑器
+.DS_Store
+*.log

@@ -1,10 +1,18 @@
 // 实习神明 · 全局常量与时代参数
 // 无边界区块世界 + 日照 + 自动建造
 
+// A-05：版本标识（构建物/控制台/关于栏统一从此处取值，发版时只改这一行）
+export const APP_VERSION = '1.1.0';
+
 export const TILE = 1.0;
 export const MAXH = 9;
 export const MINH = 0.2;
 export const WATER_LEVEL = 0.75;
+
+// A-02：原散落在 main.js / render.js 的关键玩法常量收口于此
+export const AUTOSAVE_SEC = 180;        // 自动存档间隔（秒）
+export const EXIT_SAVE_MIN_MS = 15000;  // 离场同步写档节流窗口（毫秒）
+export const MAX_BUILD_MESH = 420;      // 建筑网格视觉上限（超出后抽样代表格）
 
 // ---- 无边界区块 ----
 export const CHUNK = 10;
@@ -17,9 +25,9 @@ export const FOG_FAR = 100;
 export const ERAS = [
   { name:'蛮荒时代', roman:'I',  popTarget:200,     starCost:3, popGoal:200 },
   { name:'城邦时代', roman:'II', popTarget:2000,    starCost:3, popGoal:2000 },
-  { name:'封建时代', roman:'III',popTarget:50000,   starCost:3, popGoal:50000 },
-  { name:'工业时代', roman:'IV', popTarget:5e6,     starCost:3, popGoal:5e6 },
-  { name:'星际时代', roman:'V',  popTarget:5e9,     starCost:3, popGoal:5e9 },
+  { name:'封建时代', roman:'III',popTarget:8000,    starCost:3, popGoal:8000 },
+  { name:'工业时代', roman:'IV', popTarget:20000,   starCost:3, popGoal:20000 },
+  { name:'星际时代', roman:'V',  popTarget:100000,  starCost:3, popGoal:100000 },
 ];
 
 // R5：星星仅由里程碑触发（每时代 3 个，一次性）。禁止纯 faithRate 时间出星。
@@ -44,12 +52,12 @@ export const MILESTONES = [
     { id: 'e3won',  label: '大教堂完成', check: (G) => !!G.wonders[2] },
   ],
   [
-    { id: 'e4pop',  label: '人口≥50万', check: (G) => G.pop >= 5e5 },
+    { id: 'e4pop',  label: '人口≥1万', check: (G) => G.pop >= 10000 },
     { id: 'e4ind',  label: '工业≥200',  check: (G, c) => c.inds >= 200 },
     { id: 'e4won',  label: '摩天塔完成', check: (G) => !!G.wonders[3] },
   ],
   [
-    { id: 'e5pop',  label: '人口≥5000万', check: (G) => G.pop >= 5e7 },
+    { id: 'e5pop',  label: '人口≥5万', check: (G) => G.pop >= 50000 },
     { id: 'e5ind',  label: '工业≥500',    check: (G, c) => c.inds >= 500 },
     { id: 'e5won',  label: '太空电梯完成', check: (G) => !!G.wonders[4] },
   ],

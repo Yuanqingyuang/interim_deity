@@ -4,6 +4,9 @@
   "type": "module",
   "scripts": {
     "test": "node test/run-all.mjs",
-    "serve": "python -m http.server 8080"
+    "lint": "node test/lint.mjs",
+    "verify": "node test/lint.mjs && node test/run-all.mjs",
+    "serve": "python -m http.server 8080",
+    "test:browser": "npm --prefix test/browser install && node test/browser/game-test.mjs && node test/browser/security-test.mjs && node test/browser/leak-test.mjs && node test/browser/boot-timing.mjs && node test/browser/unload-test.mjs"
   }
 }

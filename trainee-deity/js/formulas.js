@@ -3,11 +3,11 @@
 
 import { FAITH_ERA_DAMP } from './config.js';
 
-export const T = [200, 2000, 50000, 5e6, 5e9];
+export const T = [200, 2000, 8000, 20000, 100000];
 
 export const NUM = {
   C_HOUSE: 4,
-  C_FARM: 5,
+  C_FARM: 50,
   R_FOOD: 1,
   R_IND: 0.15,
   R_CHURCH: 0.05,
@@ -17,7 +17,7 @@ export const NUM = {
   K: 1.25,
   V0: 0.07,
   C0: 0.5,
-  R_INDPOP: 0.12,
+  R_INDPOP: 0.01,
   // 人均建筑系数 r_b
   R_B: { 1: 0.25, 2: 0.20, 3: 0.15, 4: 0.05 },
   // 人口增长率 g(E)

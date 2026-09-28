@@ -1,0 +1,61 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  # ── 核心门禁：零依赖，必过 ──
+  core:
+    name: Lint + Unit Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Lint（语法 + 安全危险模式）
+        run: node test/lint.mjs
+      - name: Unit Tests（9 项数值/存档/放置基线）
+        run: node test/run-all.mjs
+
+  # ── 浏览器回归：Playwright，独立 job，不阻塞核心门禁 ──
+  browser:
+    name: Browser Regression (Playwright)
+    runs-on: ubuntu-latest
+    needs: core
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+      - name: 安装浏览器测试依赖
+        run: npm --prefix test/browser install
+      - name: 下载 Chromium（与 playwright-core 1.63.0 同版本注册表）
+        run: npx --yes playwright@1.63.0 install --with-deps chromium
+      - name: 启动静态服务（仓库根目录 :8080）
+        run: |
+          python3 -m http.server 8080 &
+          sleep 2
+          curl -sf http://localhost:8080/index.html >/dev/null && echo "server up"
+      - name: 运行浏览器回归
+        env:
+          TD_OUT: ${{ runner.temp }}/td-browser-out
+        run: |
+          node test/browser/game-test.mjs
+          node test/browser/security-test.mjs
+          node test/browser/leak-test.mjs
+          node test/browser/boot-timing.mjs
+          node test/browser/unload-test.mjs
+      - name: 上传测试产物（截图 / 结果 JSON）
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-test-output
+          path: ${{ runner.temp }}/td-browser-out
+          if-no-files-found: ignore

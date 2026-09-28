@@ -111,13 +111,15 @@ export class UI {
       this._authMode = 'login';
       $('tabLogin').classList.add('active'); $('tabReg')?.classList.remove('active');
       $('authBtn').textContent = '登 录';
+      const pw = $('authPw');
+      if(pw){ pw.setAttribute('autocomplete', 'current-password'); pw.placeholder = '至少 8 位'; }
     });
     $('tabReg')?.addEventListener('click', ()=>{
       this._authMode = 'register';
       $('tabReg').classList.add('active'); $('tabLogin')?.classList.remove('active');
       $('authBtn').textContent = '注 册';
       const pw = $('authPw');
-      if(pw) pw.setAttribute('autocomplete', 'new-password');
+      if(pw){ pw.setAttribute('autocomplete', 'new-password'); pw.placeholder = '注册：至少 8 位'; }
     });
     $('authPw')?.addEventListener('keydown', (e)=>{ if(e.key==='Enter') this.h.onAuth?.(); });
     $('newGameBtn')?.addEventListener('click', ()=>this.h.onNewGame?.());
@@ -153,14 +155,17 @@ export class UI {
     $('saveImportFile')?.addEventListener('change', (e)=>{
       const f = e.target.files?.[0];
       if(!f) return;
+      const slot = this._exportSlot || 'quick';
       const reader = new FileReader();
       reader.onload = ()=>{
-        const ok = this.h.onImportSave?.(String(reader.result||''), this._exportSlot || 'quick');
+        const ok = this.h.onImportSave?.(String(reader.result||''), slot);
         if(ok === false) this.h.onToast?.('导入失败：格式无效');
+        else this.h.onRefreshSaves?.();  // G-05：导入成功后立即刷新槽位列表
       };
       reader.readAsText(f);
       e.target.value = '';
     });
+    this.syncImportTarget();
 
     const cv = $('gameCanvas');
     // 全局屏蔽右键菜单，避免与相机操作抢浏览器快捷键/菜单
@@ -268,12 +273,38 @@ export class UI {
     const panel = $('logPanel');
     const box = $('logList');
     if(!panel || !box) return;
-    box.innerHTML = list.map(it =>
-      `<div class="log-item"><span class="t">${it.clock}</span>${it.text}</div>`
-    ).join('') || '<div class="log-item">暂无记录</div>';
+    box.innerHTML = '';
+    const items = Array.isArray(list) ? list : [];
+    if(!items.length){
+      const empty = document.createElement('div');
+      empty.className = 'log-item';
+      empty.textContent = '暂无记录';
+      box.appendChild(empty);
+    }else{
+      for(const it of items){
+        const row = document.createElement('div');
+        row.className = 'log-item';
+        const t = document.createElement('span');
+        t.className = 't';
+        t.textContent = String(it.clock ?? '');
+        row.appendChild(t);
+        row.appendChild(document.createTextNode(String(it.text ?? '')));
+        box.appendChild(row);
+      }
+    }
     panel.classList.remove('hidden');
   }
   closeLog(){ $('logPanel')?.classList.add('hidden'); }
+
+  /** G-04：把导入/导出的目标槽位显式写在按钮上，避免静默写入非预期槽位 */
+  syncImportTarget(){
+    const slot = this._exportSlot || 'quick';
+    const label = slot==='quick' ? '快速存档' : `存档 ${slot.slice(-1)}`;
+    const btn = $('saveImportBtn');
+    if(btn) btn.textContent = `导入到「${label}」`;
+    const exp = $('saveExportBtn');
+    if(exp) exp.textContent = `导出「${label}」`;
+  }
 
   renderSaveSlots(list, mode, onAct){
     const box = $('saveSlotList');
@@ -288,16 +319,23 @@ export class UI {
       const div = document.createElement('div');
       div.className = 'slot';
       const label = slot==='quick' ? '快速存档' : `存档 ${slot.slice(-1)}`;
-      const meta = m
-        ? `时代${m.era+1} · 人口${m.pop} · 种子${m.seed} · ${new Date(m.savedAt).toLocaleString()}`
+      const nameEl = document.createElement('div');
+      nameEl.className = 'slot-name';
+      nameEl.textContent = label;
+      const metaEl = document.createElement('div');
+      metaEl.className = 'slot-meta';
+      metaEl.textContent = m
+        ? `时代${(m.era|0)+1} · 人口${Math.floor(Number(m.pop)||0).toLocaleString()} · 种子${m.seed|0} · ${new Date(Number(m.savedAt)||Date.now()).toLocaleString()}`
         : '空';
-      div.innerHTML = `<div class="slot-name">${label}</div><div class="slot-meta">${meta}</div>`;
+      div.appendChild(nameEl);
+      div.appendChild(metaEl);
       const btn = document.createElement('button');
       btn.className = 'slot-act';
       btn.textContent = mode==='save' ? '保存' : '读取';
       btn.disabled = mode==='load' && !m;
       btn.onclick = ()=>{
         this._exportSlot = slot;
+        this.syncImportTarget();
         onAct(slot);
       };
       div.appendChild(btn);
@@ -306,10 +344,11 @@ export class UI {
       exp.className = 'slot-act';
       exp.textContent = '导出';
       exp.disabled = !m;
-      exp.onclick = ()=>{ this._exportSlot = slot; this._downloadSlot?.(slot); };
+      exp.onclick = ()=>{ this._exportSlot = slot; this.syncImportTarget(); this._downloadSlot?.(slot); };
       div.appendChild(exp);
       box.appendChild(div);
     }
+    this.syncImportTarget();
   }
 
   refresh(){

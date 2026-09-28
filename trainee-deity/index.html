@@ -3,6 +3,11 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <!-- A-01：内容安全策略。内联 importmap 与 JS 内联 style 属性为本项目既有需求，
+       script/style 保留 'unsafe-inline'；核心收益是封死外部脚本/对象/连接来源，
+       与 C-01 注入面修复形成双层防御。部署到正式环境时建议改用 HTTP 响应头 + nonce。 -->
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; object-src 'none'; base-uri 'self'" />
   <title>实习神明 · Trainee Deity</title>
   <link rel="stylesheet" href="styles.css" />
   <script type="importmap">
@@ -28,11 +33,12 @@
         <input id="authUser" type="text" maxlength="24" placeholder="2–24 字符" autocomplete="username" />
       </label>
       <label class="field">密码
-        <input id="authPw" type="password" maxlength="64" placeholder="至少 4 位" autocomplete="current-password" />
+        <input id="authPw" type="password" maxlength="64" placeholder="至少 8 位" autocomplete="current-password" />
       </label>
       <button id="authBtn" class="btn-primary">登 录</button>
       <p id="authMsg" class="auth-msg"></p>
       <p class="hint">数据仅保存在本机浏览器，不上传服务器。</p>
+      <p class="ver-tag" aria-label="版本号"></p>
     </div>
   </div>
 
@@ -45,6 +51,7 @@
       <button id="loadMenuBtn" class="btn-secondary">读 取 存 档</button>
       <button id="logoutBtn" class="btn-secondary">退出登录</button>
       <p class="hint">左键：工具 · 右键：旋转 · 中键/Shift+右键：平移 · 滚轮：缩放 · WASD 平移 · Q/E 旋转 · 「视角旋转/移动视角」可开关<br/>地图由随机种子生成，可用 URL <code>?seed=123</code> 分享同一世界</p>
+      <p class="ver-tag" aria-label="版本号"></p>
     </div>
   </div>
 
@@ -104,7 +111,7 @@
     </div>
   </div>
 
-  <canvas id="gameCanvas"></canvas>
+  <canvas id="gameCanvas" aria-label="游戏 3D 场景"></canvas>
 
   <!-- 顶部资源栏 -->
   <div id="topBar" class="topbar hidden">
@@ -138,8 +145,8 @@
       <span id="dayVal">☀ 白昼</span>
     </div>
     <div class="spacer"></div>
-    <button id="quickSaveBtn" class="btn-save" title="快速保存">⚡ 存</button>
-    <button id="pauseBtn" class="btn-save" title="暂停菜单">⏸ 菜单</button>
+    <button id="quickSaveBtn" class="btn-save" title="快速保存" aria-label="快速保存">⚡ 存</button>
+    <button id="pauseBtn" class="btn-save" title="暂停菜单" aria-label="打开暂停菜单">⏸ 菜单</button>
   </div>
 
   <div id="speedCtrl" class="speed-ctrl hidden">
@@ -219,9 +226,9 @@
     <div class="adv-req" id="advReq">人口 0/200 · 奇迹 ✗ · 星星 0/3</div>
   </div>
 
-  <div id="toast" class="toast"></div>
-  <div id="perfHud" class="perf-hud hidden"></div>
-  <div id="loader" class="loader">正在凝聚神力…</div>
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  <div id="perfHud" class="perf-hud hidden" aria-hidden="true"></div>
+  <div id="loader" class="loader" role="status" aria-live="polite">正在凝聚神力…</div>
 
   <script type="module" src="js/main.js"></script>
 </body>

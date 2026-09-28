@@ -10,13 +10,13 @@ function assert(cond, msg){
 }
 
 // formulas
-assert(T[0]===200 && T[4]===5e9, 'T array');
+assert(T[0]===200 && T[4]===100000, 'T array');
 assert(buildingLow(0, 1) === Math.ceil(200*0.25), 'house low E1');
 assert(buildingHigh(0, 1) === Math.ceil(200*0.25*1.25), 'house high E1');
 assert(popCap(0, 10, 0, 0) === 40, 'popCap housing E1');
-assert(popCap(2, 0, 10, 0) === 50, 'popCap food E3');
-assert(popCap(4, 0, 0, 100) === Math.floor(100*1/0.12), 'popCap industry E5');
-assert(foodPerSec(10)===50 && foodNeed(20)===20, 'food');
+assert(popCap(2, 0, 10, 0) === 500, 'popCap food E3');
+assert(popCap(4, 0, 0, 100) === Math.floor(100*1/0.01), 'popCap industry E5');
+assert(foodPerSec(10)===500 && foodNeed(20)===20, 'food');
 assert(Math.abs(faithPerSec(5, 20, 0) - (5*2 + 20*0.1) * FAITH_ERA_DAMP[0]) < 1e-9, 'faith 按时代阻尼');
 // 信仰关键不变量：每个时代「满规模攒满本时代奇迹」耗时一致 = FAITH_FILL_SEC
 // （人口每时代涨 10~1000 倍，若不阻尼则后期信仰会秒出、经济失效）

@@ -121,34 +121,6 @@ function moistureAt(x, y, seed){
   return fbm(x * 0.07, y * 0.07, 4, seed + 555);
 }
 
-/** 新区块：热侵蚀一次，坡面更自然 */
-function thermalErodeChunk(tiles, talus = 0.9, k = 0.45, iters = 2){
-  const H = CHUNK, W = CHUNK;
-  for(let it = 0; it < iters; it++){
-    const d = [];
-    for(let y=0;y<H;y++){
-      d.push([]);
-      for(let x=0;x<W;x++) d[y].push(tiles[y][x].h);
-    }
-    for(let y=0;y<H;y++){
-      for(let x=0;x<W;x++){
-        for(const [dx,dy] of [[1,0],[-1,0],[0,1],[0,-1]]){
-          const nx=x+dx, ny=y+dy;
-          if(nx<0||ny<0||nx>=W||ny>=H) continue;
-          const diff = tiles[y][x].h - tiles[ny][nx].h;
-          if(diff > talus){
-            const mv = (diff - talus) * k * 0.5;
-            d[y][x] -= mv; d[ny][nx] += mv;
-          }
-        }
-      }
-    }
-    for(let y=0;y<H;y++)
-      for(let x=0;x<W;x++)
-        tiles[y][x].h = d[y][x];
-  }
-}
-
 function fillTileFromNoise(t, x, y, seed){
   let h = sampleHeight(x, y, seed);
 
@@ -192,15 +164,8 @@ export function ensureChunk(G, cx, cy){
   for(let ly=0; ly<CHUNK; ly++)
     for(let lx=0; lx<CHUNK; lx++)
       fillTileFromNoise(tiles[ly][lx], x0+lx, y0+ly, seed);
-  thermalErodeChunk(tiles);
-  // 侵蚀后刷新水面标记与树
-  for(let ly=0; ly<CHUNK; ly++)
-    for(let lx=0; lx<CHUNK; lx++){
-      const t = tiles[ly][lx];
-      t.h = Math.min(Math.max(t.h, MINH), MAXH);
-      t.water = t.h <= WATER_LEVEL ? 1 : 0;
-      if(t.water) t.tree = 0;
-    }
+  // 不做热侵蚀：区块高度必须与 sampleHeight（旷野采样/紧凑存档还原）严格一致，
+  // 否则区块接缝错位、且紧凑编码还原的高度与生成值漂移
   G.chunks.set(k, { cx, cy, tiles });
   G.terrainDirty = true;
   return true;
@@ -266,27 +231,33 @@ export function placeAt(G, x, y, zoneType, mode='auto'){
 // ---- 工具 ----
 export function applyTool(G, hx, hy, dt){
   const tool = TOOLS[G.tool];
-  if(!tool) return;
+  if(!tool) return null;
   const consume = tool.cost * dt;
-  if(G.power < consume*0.5) return;
+  // G-06：返回原因码供 UI 提示（'ok' / 'power' / 'out' / 'water' / 'occupied' / 'height' / 'blocked' / 'empty'）
+  if(G.power < consume*0.5) return 'power';
 
   if(tool.kind === 'zone'){
     const tx = Math.round(hx), ty = Math.round(hy);
-    if(!tileLive(G, tx, ty)) return;
+    if(!tileLive(G, tx, ty)) return 'out';
     // 手动：放宽间隔，玩家可贴着放；一律走 placeAt 幂等
     if(placeAt(G, tx, ty, tool.zone, 'manual')){
       G.power = Math.max(0, G.power - consume);
       if(typeof G.onZonePlaced === 'function') G.onZonePlaced(tx, ty, tool.zone);
+      return 'ok';
     }
-    return;
+    const t = getTile(G, tx, ty);
+    if(t && t.water) return 'water';
+    if(t && t.zone > 0) return 'occupied';
+    if(t && (t.h < 0.95 || t.h > 5.4)) return 'height';
+    return 'blocked';
   }
 
   // R6 拆除：清除 zone/built/prog，保留地形
   if(tool.kind === 'demolish'){
     const tx = Math.round(hx), ty = Math.round(hy);
-    if(!tileLive(G, tx, ty)) return;
+    if(!tileLive(G, tx, ty)) return 'out';
     const t = getTile(G, tx, ty);
-    if(!t || t.zone <= 0) return;
+    if(!t || t.zone <= 0) return 'empty';
     const z = t.zone;
     t.zone = 0; t.prog = 0; t.built = false;
     ensureChunkRing(G, tx, ty);
@@ -296,7 +267,7 @@ export function applyTool(G, hx, hy, dt){
     logPush(G, 90, tx, ty);
     // 只走移除回调，禁止 onZonePlaced（会误写「建起」日志）
     if(typeof G.onZoneRemoved === 'function') G.onZoneRemoved(tx, ty, z);
-    return;
+    return 'ok';
   }
 
   const R = tool.radius;
@@ -370,6 +341,7 @@ export function applyTool(G, hx, hy, dt){
     const hx0 = Math.round(hx), hy0 = Math.round(hy);
     G.onToolHit(hx0, hy0, G.tool);
   }
+  return 'ok';
 }
 
 function mixRGB(a, b, t){
