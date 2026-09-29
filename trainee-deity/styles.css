@@ -129,6 +129,15 @@ body.cur-cam #gameCanvas:active{cursor:grabbing;}
 .dlg-actions{display:flex;justify-content:center;gap:10px;margin-top:8px;}
 .btn-save{font:inherit;font-size:12px;padding:4px 10px;border-radius:10px;border:1px solid var(--gold-soft);background:rgba(0,0,0,.3);color:var(--gold);cursor:pointer;backdrop-filter:blur(6px);}
 
+/* F3：窄屏下「存/菜单」钉在顶栏右侧（原先被单行横滚挤出视口，移动端不可见）；
+   隐藏星星进度让位，资源区仍可横滚查看 */
+@media (max-width:640px){
+  #quickSaveBtn, #pauseBtn{position:fixed;top:18px;right:12px;z-index:21;}
+  #quickSaveBtn{right:86px;}
+  /* 星星/产能在底部进阶条已有同口径展示，窄屏顶栏让位给天数与操作按钮 */
+  #starProg, .res-ind, .res-stars{display:none;}
+}
+
 @media (max-width:900px){
   .res .rate{display:none;}
 }

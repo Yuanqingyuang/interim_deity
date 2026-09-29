@@ -197,7 +197,38 @@ export function genWorld(G){
       const t = getTile(G,x,y);
       if(t) t.tree = 0;
     }
+  seedVillage(G);
   G.terrainDirty = true;
+}
+
+// F2：开局村落 —— 设计的人口上限 = 住房×C_HOUSE（E1–2），零住房开局即 cap=0 人口崩溃，
+// 设计前提是开局已有住房。此处直接放置 5 房（cap=20=开局人口）+ 1 农田（粮 50/s）
+// 且为已建成态，人口自第一 tick 起即可随新房建成增长；原点若为水面则回退到最近陆地。
+function seedVillage(G){
+  const spots = [
+    [0,0,1],[2,1,1],[-2,1,1],[1,-2,1],[-1,-2,1],[0,2,2],
+  ];
+  const landNear = (x, y)=>{
+    for(let r=0;r<=6;r++){
+      for(let dy=-r;dy<=r;dy++)
+        for(let dx=-r;dx<=r;dx++){
+          const t = getTile(G, x+dx, y+dy);
+          if(t && !t.water && t.h >= 0.95 && t.h <= 5.4) return [x+dx, y+dy];
+        }
+    }
+    return null;
+  };
+  for(const [x, y, z] of spots){
+    let p = null;
+    const t0 = getTile(G, x, y);
+    if(t0 && !t0.water && t0.h >= 0.95 && t0.h <= 5.4) p = [x, y];
+    else p = landNear(x, y);
+    if(!p) continue;
+    const t = getTile(G, p[0], p[1]);
+    if(t.zone > 0) continue;
+    t.zone = z; t.built = true; t.prog = 1; t.tree = 0;
+    ensureChunkRing(G, p[0], p[1]);
+  }
 }
 
 /**

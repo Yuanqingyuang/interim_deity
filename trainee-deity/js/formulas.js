@@ -86,12 +86,15 @@ export function growPop(N, cap, E, farms, dt){
   const g = NUM.GROWTH[Math.max(0, Math.min(4, E))];
   let next = N * (1 + g * dt) + 0.6 * dt;
   if(next > cap) next = cap;
-  // 粮食约束
+  // 粮食约束：缺粮时按缺口比例连续（dt 比例）衰减；
+  // 旧实现「每 tick 减半」下限与帧率耦合，低帧下人口数秒内从 20 崩到 1。
   const food = foodPerSec(farms);
   if(food < foodNeed(next)){
-    next = Math.max(0, food / NUM.R_FOOD);
+    const supported = food / NUM.R_FOOD;
+    const deficit = (foodNeed(next) - food) / Math.max(1e-6, foodNeed(next));
+    next = supported - supported * Math.min(0.5, deficit) * dt;
   }
-  return Math.max(N * 0.5, next);
+  return Math.max(0, next);
 }
 
 // 建造速度 V(E) = V0 * clamp(产能供给 / 产能需求, 0.2, 2)
@@ -101,7 +104,10 @@ export function buildSpeed(E, industries, pending){
   const eW = Math.pow(1.5, E);
   const demand = Math.max(1e-6, pending * NUM.C0 * eW);
   const ratio = supply / demand;
-  return NUM.V0 * Math.max(0.2, Math.min(2.0, ratio));
+  // F2：0.2 下限假设「已有工业」；零工业开局 V=0.014/s（单栋约 71 游戏秒），
+  // 首栋住房建成远慢于人口压力。无工业时改用村民「自建」底速 0.5×V0（约 14 游戏秒/栋）。
+  const floor = industries > 0 ? 0.2 : 0.5;
+  return NUM.V0 * Math.max(floor, Math.min(2.0, ratio));
 }
 
 // N_render = clamp(round(50*log10(N) - 85), min(E), max(E))

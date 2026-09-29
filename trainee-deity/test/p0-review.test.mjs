@@ -14,7 +14,7 @@ const G = createState(21);
 genWorld(G);
 G.logs = [];
 let site = null;
-eachTile(G, (t,x,y)=>{ if(!site && !t.water && t.h>1.2 && t.h<4.5) site=[x,y]; });
+eachTile(G, (t,x,y)=>{ if(!site && !t.water && !t.zone && t.h>1.2 && t.h<4.5) site=[x,y]; });
 placeAt(G, site[0], site[1], 1, 'manual');
 // simulate main onZonePlaced only for place - demolish uses onZoneRemoved
 G.onZonePlaced = (x,y,z)=>{ G.logs.push({c:z,x,y,t:0}); };
@@ -26,10 +26,14 @@ const buildLogs = G.logs.filter(e => e.c>=1 && e.c<=4);
 assert(buildLogs.length === 0, 'no build logs on demolish');
 assert(getTile(G, site[0], site[1]).zone === 0, 'zone cleared');
 
-// food口径：built vs zoned 不变量 — place farm, not built → foodPerSec(built)=0
+// food口径：built vs zoned 不变量 — place farm, not built → built 计数不增加
+// （开局村落 seedVillage 可能自带已建成农田，故用增量断言）
+refreshBuiltCache(G);
+const farmBefore = G._builtCache[2];
+const farmZonedBefore = G._zoneCache[2];
 placeAt(G, site[0]+2, site[1], 2, 'manual');
 refreshBuiltCache(G);
-assert(G._builtCache[2] === 0, 'farm not built yet');
-assert(G._zoneCache[2] === 1, 'farm zoned=1');
+assert(G._builtCache[2] === farmBefore, 'farm not built yet');
+assert(G._zoneCache[2] === farmZonedBefore + 1, 'farm zoned +1');
 
 console.log('P0 review tests PASS');

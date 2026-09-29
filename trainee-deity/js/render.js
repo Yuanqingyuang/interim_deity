@@ -501,6 +501,11 @@ export class Renderer {
     if(this._terrainGeoMeta !== geoMeta){
       // 尺寸变化（城区扩张）才重建 GPU 缓冲；否则原地更新，避免 dispose/上传抖动
       g.dispose();
+      // F1：computeVertexNormals 复用已存在的 normal 属性且不校验 count；扩张后旧 normal
+      // 缓冲比新 position 小，WebKit 严格校验 active attribute → glDrawElements
+      // INVALID_OPERATION 并跳过地形 draw call（整块地形消失）。删除旧 normal，
+      // 让下方 computeVertexNormals 按新尺寸重建。
+      g.deleteAttribute('normal');
       g.setAttribute('position', new THREE.BufferAttribute(positions,3));
       g.setAttribute('color', new THREE.BufferAttribute(colors,3));
       g.setIndex(new THREE.BufferAttribute(this._terrainIdx,1));
