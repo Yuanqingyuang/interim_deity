@@ -528,7 +528,14 @@ function tick(dt){
   const bSum = (bc[1]||0)+(bc[2]||0)+(bc[3]||0)+(bc[4]||0);
   let pending = Math.max(0, zSum - bSum);
   G._pendingBuild = pending;
-  let vBuild = F.buildSpeed(E, inds, pending);
+  // §3⑤ 产能需求按各建筑造价权重折算（NUM.BUILD_COST，加权均值 = 1.0）
+  let pendingW = 0;
+  for(const z of [1,2,3,4]){
+    pendingW += Math.max(0, (zc[z]||0) - (bc[z]||0)) * (F.NUM.BUILD_COST[z] ?? 1);
+  }
+  // §3⑥b 在建奇迹持续占用产能（施工总消耗 = coinCost(E) = 建造时长 × 刚需工业产能/秒）
+  const wonderDraw = G.wonderList.some(w=>!w.done) ? F.wonderDrawPerSec(E) : 0;
+  let vBuild = F.buildSpeed(E, inds, pendingW, wonderDraw);
   if(G.boostBuild>0) vBuild *= 3;
 
   // R11：仅推进 pending 列表，避免每帧全图 eachTile
@@ -674,10 +681,12 @@ function autoBuild(){
   const foodNeed = F.foodNeed(G.pop);
   const indOut = F.industryPerSec(indsBuilt);
   // #25 性能：待建 = 划定 − 建成（与 tick 的 zSum−bSum 同口径），不再全图扫
-  const zSumA = (cnt[1]||0)+(cnt[2]||0)+(cnt[3]||0)+(cnt[4]||0);
-  const bSumA = (bcA[1]||0)+(bcA[2]||0)+(bcA[3]||0)+(bcA[4]||0);
-  const pending = Math.max(0, zSumA - bSumA);
-  const buildDemand = pending * F.NUM.C0 * Math.pow(1.5, E);
+  // §3⑤ 需求与 tick 一致按 BUILD_COST 加权（否则 autoBuild 门控与实际建造速度脱节）
+  let pendingW = 0;
+  for(const z of [1,2,3,4]){
+    pendingW += Math.max(0, (cnt[z]||0) - (bcA[z]||0)) * (F.NUM.BUILD_COST[z] ?? 1);
+  }
+  const buildDemand = pendingW * F.NUM.C0 * Math.pow(1.5, E);
 
   // 粮食有余：能养活当前人口，且再养 4 人（一栋房）仍够
   const foodOk = foodOut >= foodNeed * 1.05 && foodOut >= (G.pop + 4) * F.NUM.R_FOOD;

@@ -25,8 +25,13 @@ export const NUM = {
   // 村民渲染上下限（numeric-design §7.2）
   RENDER_MIN: [10, 50, 100, 165, 250],
   RENDER_MAX: [60, 120, 200, 300, 400],
-  // 显示比例 p(E)（可选展示）
-  RENDER_P: [0.15, 0.04, 0.003, 5e-5, 8e-8],
+  // 代理比 q(E) = T(E)÷R(E)：1 个渲染村民代表 q 个实际村民（§7.2，p(E) = 1/q(E)）。
+  // E3 取 53.33（表内 53 为舍入显示），保证 T(E) 下输出恰为 30/80/150/250/400。
+  RENDER_Q: [6.7, 25, 53.33, 80, 250],
+  // 各建筑造价权重（§3⑤/§6）：产能需求 = c_build(E) × cost(zone)。
+  // 按刚需配比 r_b 加权后均值恰为 1.0（0.25×0.6+0.20×0.8+0.15×1.6+0.05×2.0 = 0.65 = Σr_b），
+  // 不改变 §4.3 整体建造速度曲线，只重新分配四类建筑间的经济压力。
+  BUILD_COST: { 1: 0.6, 2: 0.8, 3: 1.6, 4: 2.0 },
 };
 
 // 建筑布局参数（numeric-design §8.6）
@@ -97,10 +102,11 @@ export function growPop(N, cap, E, farms, dt){
   return Math.max(0, next);
 }
 
-// 建造速度 V(E) = V0 * clamp(产能供给 / 产能需求, 0.2, 2)
-export function buildSpeed(E, industries, pending){
+// 建造速度 V(E) = V0 * clamp((产能供给 − 奇迹占用) / 产能需求, floor, 2)
+// pending 为按 BUILD_COST 加权后的待建数（§3⑤）；wonderDraw 为在建奇迹的每秒产能占用（§3⑥b）
+export function buildSpeed(E, industries, pending, wonderDraw = 0){
   if(pending <= 0) return NUM.V0;
-  const supply = industryPerSec(industries);
+  const supply = Math.max(0, industryPerSec(industries) - wonderDraw);
   const eW = Math.pow(1.5, E);
   const demand = Math.max(1e-6, pending * NUM.C0 * eW);
   const ratio = supply / demand;
@@ -110,10 +116,22 @@ export function buildSpeed(E, industries, pending){
   return NUM.V0 * Math.max(floor, Math.min(2.0, ratio));
 }
 
-// N_render = clamp(round(50*log10(N) - 85), min(E), max(E))
+/**
+ * 在建奇迹的每秒产能占用（§3⑥b/§4.4）。
+ * coinCost(E) = 建造时长(E) × 产能/秒(E)，产能/秒(E) 取本时代刚需工业水位
+ * industryPerSec(buildingLow(E,3)) = 30/300/1200/3000/15000（与 §4.4 表一致）。
+ * 游戏无产能库存，实现口径 = 施工期内持续占用该流量，施工总消耗恰为 coinCost(E)。
+ */
+export function wonderDrawPerSec(E){
+  return industryPerSec(buildingLow(E, 3));
+}
+
+// N_render = clamp(round(N ÷ q(E)), min(E), max(E))（§7.1 线性方案，2026-09-30 重标定）
+// 目标人口 T(E) 下输出恰为 R(E) = 30/80/150/250/400（旧对数式 (50,−85) 按旧 T 标定，
+// 新 T 下 E3–E5 仅 110/165/250，视觉成长感不足，见 numeric-design §7.2 注）
 export function renderVillagers(N, E){
   if(N <= 1) return NUM.RENDER_MIN[E];
-  const raw = Math.round(50 * Math.log10(N) - 85);
+  const raw = Math.round(N / NUM.RENDER_Q[E]);
   const lo = NUM.RENDER_MIN[E], hi = NUM.RENDER_MAX[E];
   return Math.max(lo, Math.min(hi, raw));
 }
