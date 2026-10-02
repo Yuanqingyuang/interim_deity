@@ -1,5 +1,5 @@
 // 实习神明 · 主循环
-import { TILE, MIRACLES, WONDERS, ERAS, AUTO, TOOLS, MILESTONES, ZONES,
+import { TILE, CHUNK, MIRACLES, WONDERS, ERAS, AUTO, TOOLS, MILESTONES, ZONES,
   powerMaxOf, powerRegenOf, faithCapOf, sampleSun,
   APP_VERSION, AUTOSAVE_SEC, EXIT_SAVE_MIN_MS } from './config.js';
 import { createState, housingCap, faithMult, serializeState, serializeStateAsync, deserializeState,
@@ -392,6 +392,48 @@ function startGame(){
       ensureChunkRing(G, x, y);
       R.panCameraTo(x, y);
     };
+    // 压测探针：程序化放置本时代奇迹。
+    // 斜视角下屏幕中心的射线落点会远离 controls.target（常落在水面或未生成区块），
+    // 自动化点击放置极不稳定；这里在「已生成区块」内找距相机最近的合法格，
+    // 复用 placeWonder（校验条件与手动放置完全一致），仅用于 ?debug=1 压测。
+    // 返回 { ok, reason, x, y }，失败原因供压测日志定位。
+    window.__tdWonder = ()=>{
+      const era = G.era;
+      const w = WONDERS[era];
+      if(!w) return { ok:false, reason:'本时代无奇迹' };
+      if(G.wonders[era]) return { ok:false, reason:'本时代奇迹已建成' };
+      if(G.wonderList.some(x=>!x.done)) return { ok:false, reason:'已有奇迹在建' };
+      if(G.faith < w.faithCost) return { ok:false, reason:`信仰不足 ${Math.floor(G.faith)}/${w.faithCost}` };
+      // 不做按需生成的大范围螺旋：无边界世界若为找地而拉起成百上千区块，
+      // 地形重建与显存都会爆；已生成区块里必然有 dbgFill 未占满的空地
+      const scan = ()=>{
+        const ox = R.controls.target.x / TILE, oy = R.controls.target.z / TILE;
+        let best = null, bestD = Infinity;
+        for(const ch of G.chunks.values()){
+          const x0 = ch.cx * CHUNK, y0 = ch.cy * CHUNK;
+          for(let ly = 0; ly < CHUNK; ly++){
+            const row = ch.tiles[ly];
+            for(let lx = 0; lx < CHUNK; lx++){
+              const t = row[lx];
+              if(t.water || t.zone > 0 || t.h < 1.0 || t.h > 5.5) continue;
+              const x = x0 + lx, y = y0 + ly;
+              const d = (x - ox) * (x - ox) + (y - oy) * (y - oy);
+              if(d < bestD){ bestD = d; best = { x, y }; }
+            }
+          }
+        }
+        return best;
+      };
+      let hit = scan();
+      if(!hit){
+        ensureChunkRing(G, Math.round(R.controls.target.x / TILE), Math.round(R.controls.target.z / TILE));
+        hit = scan();
+      }
+      if(!hit) return { ok:false, reason:`已生成区块（${G.chunks.size}）内无合法格` };
+      const before = G.wonderList.length;
+      placeWonder(hit.x, hit.y);
+      return { ok: G.wonderList.length > before, reason:'placed', ...hit };
+    };
   }
   // 静音按钮：图标反映当前状态
   const muteBtn = document.getElementById('muteBtn');
@@ -522,7 +564,10 @@ function perfTick(rawDt){
       `FPS ${fps.toFixed(0)}   帧 ${frameMs.toFixed(1)}ms   峰值 ${perfMaxMs.toFixed(1)}ms\n` +
       `DrawCall ${info.calls}   三角面 ${info.triangles}`;
   }
-  window.__perf = { fps:Math.round(fps), frameMs:+frameMs.toFixed(2), maxMs:+perfMaxMs.toFixed(1), drawCalls:info.calls, triangles:info.triangles };
+  // 附带规模读数（时代/人口/各类已建成数），供压测把 drawCall 与建筑数对应起来
+  const bc = (G._builtCache && G._builtCache.valid) ? G._builtCache : null;
+  window.__perf = { fps:Math.round(fps), frameMs:+frameMs.toFixed(2), maxMs:+perfMaxMs.toFixed(1), drawCalls:info.calls, triangles:info.triangles,
+    era:G.era, pop:Math.floor(G.pop), houses:bc?.[1]||0, farms:bc?.[2]||0, inds:bc?.[3]||0, churches:bc?.[4]||0 };
   perfAcc = 0; perfFrames = 0; perfMaxMs = 0;
 }
 
@@ -985,7 +1030,7 @@ function checkFinalWin(){
 }
 
 function syncNpc(){
-  // numeric-design §7：N_render = clamp(round(50*log10(N)-85), min(E), max(E))
+  // numeric-design §7：N_render = clamp(round(N / RENDER_Q[E]), min(E), max(E))（线性重标定）
   const n = F.renderVillagers(G.pop, F.eraIndex(G));
   R.markNpcHomesDirty?.();
   R.setNpcCount(n, G);

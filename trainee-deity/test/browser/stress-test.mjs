@@ -53,30 +53,44 @@ const USER = 'stress_bot_' + Date.now().toString(36);
 const PW = 'pw12345678';
 
 const eraText = () => page.textContent('#eraBadge');
-const popText = () => page.textContent('#popVal').catch(() => '?');
 const samplePerf = () => page.evaluate(() => window.__perf || null).catch(() => null);
 
 // 连续采样 n 次（间隔 gapMs），返回均值与末值
+// 规模读数（era/pop/houses/farms/inds/churches）取自 __perf：
+// toast 会被里程碑提示覆盖，不能作为建筑数来源
 async function sampleN(n, gapMs) {
   const arr = [];
   for (let i = 0; i < n; i++) {
     const p = await samplePerf();
-    if (p) arr.push({ ...p, pop: await popText() });
+    if (p) arr.push(p);
     await page.waitForTimeout(gapMs);
   }
   if (!arr.length) return null;
   const avg = k => +(arr.reduce((s, p) => s + (p[k] || 0), 0) / arr.length).toFixed(1);
+  const last = arr.at(-1);
   return { avgFps: avg('fps'), avgFrameMs: avg('frameMs'), maxMs: Math.max(...arr.map(p => p.maxMs)),
-           drawCalls: arr.at(-1).drawCalls, triangles: arr.at(-1).triangles,
-           popStart: arr[0].pop, popEnd: arr.at(-1).pop, samples: arr.length };
+           drawCalls: last.drawCalls, triangles: last.triangles,
+           houses: last.houses, farms: last.farms, inds: last.inds, churches: last.churches,
+           popStart: arr[0].pop, popEnd: last.pop, samples: arr.length };
 }
 
 // 点调试按钮并计时（dbgFill 会全量重建地形，可能阻塞主线程数十秒）
 async function clickTimed(sel, timeoutMs = 300000) {
   const t0 = Date.now();
-  await page.click(sel, { timeout: timeoutMs });
+  await hardClick(sel, timeoutMs);
   await page.waitForTimeout(300);
   return Date.now() - t0;
+}
+
+// 软渲染下长帧常占满主线程，playwright 真实点击会在「稳定性检查 + 事件派发」阶段超时
+// （实测：39 万三角面满城视图下 #dbgEra 点击 30s 超时）；超时后退回页内 click，
+// 对调试面板 / 顶栏按钮效果等价，不影响游戏逻辑断言
+async function hardClick(sel, timeoutMs = 60000) {
+  try {
+    await page.click(sel, { timeout: timeoutMs });
+  } catch {
+    await page.evaluate((s) => document.querySelector(s)?.click(), sel);
+  }
 }
 
 try {
@@ -121,12 +135,6 @@ try {
 
   // ── D: 逐时代「奇迹→刷建筑→跳时代」──
   // 奇迹必须先于 dbgFill：刷建筑后地块 zone>0，placeWonder 会拒绝
-  // 中心点优先 + 8 向 ±150px（对角 ~±106）兜底：相机已传送出建筑区，中心即空地
-  const wonderOffsets = [
-    [0, 0],
-    [0, -150], [150, 0], [0, 150], [-150, 0],
-    [106, -106], [106, 106], [-106, 106], [-106, -106],
-  ];
   // 各时代奇迹耗时（config.js WONDERS.time）：低帧率下 sim 仅 ~0.2s/真实秒（×4 速），
   // 完工等待 ≈ time×5 秒，另加 60s 余量
   const WONDER_TIME = { 1: 24, 2: 30, 3: 36 };
@@ -134,71 +142,88 @@ try {
     const eraLabel = `E${eraIdx + 1}`;
     // D1 奇迹（E2 起需要；E1 无奇迹门槛）
     if (eraIdx >= 1) {
-      await page.click('#dbgGive'); // 信仰补满（cap = 2×cost，必然够）
+      await hardClick('#dbgGive'); // 信仰补满（cap = 2×cost，必然够）
       await page.waitForTimeout(200);
       // 相机传送到 +x 轴 eraIdx*80 单位处，逃离以原点为中心的刷建筑区
       // （E1 半径~22 / E2~70 / E3~139；W 键平移受 dt clamp 限制，~1fps 下 5s 仅挪 ~3 单位，无效）
       await page.evaluate((d) => window.__tdPan(d, 0), eraIdx * 80);
       await page.waitForTimeout(1500);
-      await page.click('#wonderBtn');
+      await hardClick('#wonderBtn'); // 走真实 UI 进入放置模式
       await page.waitForTimeout(200);
-      const box = await page.locator('#gameCanvas').boundingBox();
-      const cx = box.x + box.width / 2, cy = box.y + box.height / 2;
-      let placed = false;
-      for (const [dx, dy] of wonderOffsets) {
-        const placing = await page.evaluate(() =>
-          document.getElementById('wonderBtn').classList.contains('placing'));
-        if (!placing) break; // 已放置或未能进入放置模式
-        await page.mouse.click(cx + dx, cy + dy);
+      const isPlacing = () => page.evaluate(() =>
+        document.getElementById('wonderBtn').classList.contains('placing'));
+      let placed = false, probe = null;
+      if (await isPlacing()) {
+        // 先试屏幕中心真实点击；斜视角下落点常偏离相机目标（水面/未生成区块），
+        // 失败则用 __tdWonder 探针兜底（在已生成区块内找最近合法格，复用 placeWonder 校验）
+        const box = await page.locator('#gameCanvas').boundingBox();
+        await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
         await page.waitForTimeout(400);
-        placed = !(await page.evaluate(() =>
-          document.getElementById('wonderBtn').classList.contains('placing')));
-        if (placed) break;
+        placed = !(await isPlacing());
+        if (!placed) {
+          probe = await page.evaluate(() => window.__tdWonder?.() || null);
+          placed = !!probe?.ok;
+        }
       }
       // 等奇迹完工：低帧率下 sim ≈ 0.2s/真实秒，需 time×5 + 60s 余量
       await page.waitForFunction(() =>
         (document.getElementById('wonderBtn')?.title || '').includes('已建成'),
         null, { timeout: (WONDER_TIME[eraIdx] * 5 + 60) * 1000 }).catch(() => {});
       const title = await page.evaluate(() => document.getElementById('wonderBtn')?.title || '');
-      log(`D${eraLabel}.奇迹`, placed && title.includes('已建成'), `placed=${placed} title="${title}"`);
+      log(`D${eraLabel}.奇迹`, placed && title.includes('已建成'), `placed=${placed} probe=${JSON.stringify(probe)} title="${title}"`);
       await page.screenshot({ path: `${SHOTS}/02-wonder-${eraLabel}.png` });
+      // 相机回城市中心（原点）：dbgFill 恒以原点为中心刷建筑，采样必须看城市视角；
+      // 否则传送距离超过城市半径时（E4 传送 240 单位 > 城市半径 ~206 单位）采样到的是空景
+      await page.evaluate(() => window.__tdPan(0, 0));
+      await page.waitForTimeout(1500);
     }
     // D2 刷建筑（计时）
     const fillMs = await clickTimed('#dbgFill');
-    const fillToast = await page.evaluate(() =>
-      document.getElementById('toast')?.textContent || '');
     const perfFill = await sampleN(6, 500);
-    results.perfByEra.push({ stage: `${eraLabel}.刷建筑后`, fillMs, toast: fillToast, ...perfFill });
-    log(`D${eraLabel}.刷建筑`, true, `fillMs=${fillMs} toast="${fillToast}" perf=${JSON.stringify(perfFill)}`);
+    results.perfByEra.push({ stage: `${eraLabel}.刷建筑后`, fillMs, ...perfFill });
+    log(`D${eraLabel}.刷建筑`, !!perfFill,
+      `fillMs=${fillMs} 居${perfFill?.houses} 田${perfFill?.farms} 工${perfFill?.inds} 教${perfFill?.churches} ` +
+      `fps=${perfFill?.avgFps} draws=${perfFill?.drawCalls} tris=${perfFill?.triangles} pop=${perfFill?.popEnd}`);
     // D3 跳时代（失败则中止：时代错位会污染后续所有数据）
+    // 实测首次点击偶发不生效（里程碑提示与 dbgEra 竞态），重试 3 次
     if (eraIdx < 3) {
       const before = await eraText();
-      await page.click('#dbgEra');
-      await page.waitForFunction(([sel, old]) =>
-        document.querySelector(sel)?.textContent !== old, ['#eraBadge', before], { timeout: 15000 }).catch(() => {});
-      const after = await eraText();
-      const eraToast = await page.evaluate(() => document.getElementById('toast')?.textContent || '');
+      let after = before, eraToast = '';
+      for (let attempt = 1; attempt <= 3; attempt++) {
+        await hardClick('#dbgEra');
+        await page.waitForFunction(([sel, old]) =>
+          document.querySelector(sel)?.textContent !== old, ['#eraBadge', before], { timeout: 15000 }).catch(() => {});
+        after = await eraText();
+        eraToast = await page.evaluate(() => document.getElementById('toast')?.textContent || '');
+        if (before !== after) break;
+        await page.waitForTimeout(1000);
+      }
       log(`D${eraLabel}.跳时代`, before !== after, `eraBadge "${before.trim().replace(/\s+/g, '')}"→"${after.trim().replace(/\s+/g, '')}" toast="${eraToast}"`);
       if (before === after) throw new Error(`跳时代失败于 ${eraLabel}，toast="${eraToast}"`);
     }
     await page.screenshot({ path: `${SHOTS}/03-fill-${eraLabel}.png` });
   }
 
-  // ── E: E5 规模长采样（60×1s，含人口增长曲线）──
-  const fillMsE5 = await clickTimed('#dbgFill'); // era=E5 时再刷一轮（每类封顶 2000）
-  log('E0.E5刷建筑', true, `fillMs=${fillMsE5}`);
+  // ── E: 末代（IV 工业时代）城市视角长采样（60×1s，含人口增长曲线）──
+  // 注：V 星际时代门槛为产能 1500/s，压测规模（工业封顶 2000 座 ≈921/s）达不到，故末代止于 IV
+  const fillMsE5 = await clickTimed('#dbgFill'); // 再刷一轮（每类封顶 2000；原点区饱和时新增≈0）
+  const scaleE5 = await samplePerf();
+  log('E0.末代刷建筑', !!scaleE5,
+    `fillMs=${fillMsE5} 居${scaleE5?.houses} 田${scaleE5?.farms} 工${scaleE5?.inds} 教${scaleE5?.churches} pop=${scaleE5?.pop}`);
   for (let i = 0; i < 60; i++) {
     const p = await samplePerf();
-    if (p) results.e5Timeline.push({ t: i, ...p, pop: await popText() });
+    if (p) results.e5Timeline.push({ t: i, ...p });
     await page.waitForTimeout(1000);
   }
   const fpsArr = results.e5Timeline.map(x => x.fps);
   const avgFps = fpsArr.length ? +(fpsArr.reduce((a, b) => a + b, 0) / fpsArr.length).toFixed(1) : -1;
   const minFps = fpsArr.length ? Math.min(...fpsArr) : -1;
   const last = results.e5Timeline.at(-1) || {};
-  log('E1.E5长采样', fpsArr.length >= 30,
+  log('E1.末代长采样', fpsArr.length >= 30,
     `samples=${fpsArr.length} avgFps=${avgFps} minFps=${minFps} maxMs=${last.maxMs} draws=${last.drawCalls} tris=${last.triangles} pop ${results.e5Timeline[0]?.pop}→${last.pop}`);
-  await page.screenshot({ path: `${SHOTS}/04-e5-final.png` });
+  // 软渲染下满城视图单帧截图可超默认 30s：放宽到 120s，且失败降级为尽力而为
+  // （截图仅存档用，不影响数据结论；此前正是此处超时导致 results.json 未落盘）
+  await page.screenshot({ path: `${SHOTS}/04-e5-final.png`, timeout: 120000 }).catch(() => {});
 
   // ── F: 全程无 pageError ──
   log('F.pageErrors', results.pageErrors.length === 0,
