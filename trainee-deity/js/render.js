@@ -7,13 +7,34 @@ import {
   TILE, WATER_LEVEL, WILD, FOG_NEAR, FOG_FAR,
   PALETTES, BUILDING_STYLE, ZONES, FOLKCOL, FOLK_HEAD,
   CHURCH_STYLE, FACTORY_STYLE, CHUNK, FARM_CROP, FARM_SOIL, churchStyleForEra, factoryStyleForEra,
-  sampleSun, lerpHex, hash2, mulberry32, MAX_BUILD_MESH, MAX_TREE_MESH
+  sampleSun, lerpHex, hash2, mulberry32, MAX_BUILD_MESH, MAX_TREE_MESH, MAX_NPC_INST
 } from './config.js';
 import { cornerColor, heightAt, riverMask, sampleHeight } from './terrain.js';
 import { getTile, eachTile, chunkBounds, tileLive } from './state.js';
 
 const WATER_Y = WATER_LEVEL;
 const MIN_H_SAFE = 0.22;
+
+// P3-B：村民部件批次表。原实现每人一个 Group（腿×2/臂×2/躯干/头/发/挎包 = 8 Mesh），
+// 400 人即 3200 Mesh、含阴影 pass 约 816 draws；改为 6 个 InstancedMesh 后与人数脱钩。
+// k=批次名 / geo=_buildGeo 共享几何键 / mat=材质槽 / mul=每人实例数 / cast=是否投影
+const NPC_BATCH_DEFS = [
+  { k:'leg',   geo:'leg',     mat:'dark',  mul:2, cast:true  },
+  { k:'arm',   geo:'arm',     mat:'cloth', mul:2, cast:true  },
+  { k:'torso', geo:'torso',   mat:'cloth', mul:1, cast:true  },
+  { k:'head',  geo:'head',    mat:'skin',  mul:1, cast:true  },
+  { k:'hair',  geo:'hair',    mat:'dark',  mul:1, cast:true  },
+  { k:'bag',   geo:'satchel', mat:'bag',   mul:1, cast:false }
+];
+// 部件在（pivot 或整体）坐标系下的固定局部平移，与原 _makeVillager 的 mesh.position 一致
+const NPC_LOCAL = {
+  leg:   new THREE.Matrix4().makeTranslation(0, -0.08, 0),   // 相对髋部 pivot
+  arm:   new THREE.Matrix4().makeTranslation(0, -0.07, 0),   // 相对肩部 pivot
+  torso: new THREE.Matrix4().makeTranslation(0, 0.28, 0),
+  head:  new THREE.Matrix4().makeTranslation(0, 0.46, 0),
+  hair:  new THREE.Matrix4().makeTranslation(0, 0.48, 0),
+  bag:   new THREE.Matrix4().makeTranslation(0.1, 0.28, 0.06)
+};
 
 export class Renderer {
   constructor(canvas){
@@ -105,9 +126,26 @@ export class Renderer {
     this._treeInst = null;     // {trunk,cone,mid,ico,bush} 批次缓存（时代切换时重建）
     this._treeDummy = new THREE.Object3D();
     this._treeSigA = null; this._treeSigB = null; this._treeKept = -1;
+    // P3-A 建筑合批：已完工建筑按「模板部件表」写入全局 (几何,材质,阴影) 槽位 InstancedMesh；
+    // 建造中建筑仍走独立 Group（进度缩放动画需要逐栋矩阵）
+    this._bldCand = [];        // 每帧收集的已完工建筑格（复用数组）
+    this._bldInst = null;      // 槽位 InstancedMesh 数组（时代切换时重建）
+    this._bldTpl = null;       // 模板缓存 Map(`${type}|${varn}` → 部件表)
+    this._bldDummy = new THREE.Object3D();
+    this._bldM1 = new THREE.Matrix4();
+    this._bldM2 = new THREE.Matrix4();
+    this._bldSigA = null; this._bldSigB = null; this._bldKept = -1;
     this.terrainDirty = true;
     this._npcHomes = [];
     this._npcHomesDirty = true;
+    // P3-B 村民合批：状态记录改为纯数据数组，网格由 6 个 InstancedMesh 承载
+    this._npcs = [];           // 村民状态（位置/朝向/摆动角/目标/计时）
+    this._npcInst = null;      // { cap, b:{批次名→InstancedMesh}, mats }
+    this._npcEra = null;       // 当前批次配色对应的时代
+    this._npcDummy = new THREE.Object3D();   // 整体（位置 + 朝向）
+    this._npcPivot = new THREE.Object3D();   // 髋/肩 pivot（位置 + 摆动 rotation.x）
+    this._npcM1 = new THREE.Matrix4();
+    this._npcM2 = new THREE.Matrix4();
 
     this._buildGeo();
     this._buildSkyTexture(0, this.dayTime);
@@ -1132,6 +1170,123 @@ export class Renderer {
     for(const m of Object.values(inst)) m.instanceMatrix.needsUpdate = true;
   }
 
+  // ---- P3-A 建筑合批：已完工建筑按模板部件写入全局槽位 InstancedMesh ----
+  // 原每栋建筑一个独立 Group（6~18 个 Mesh，castShadow 阴影 pass 再翻倍），
+  // 满城抽样 420 格时 DrawCall ~2020（占总量 67%）。合批后 DrawCall 只由
+  // 「活跃部件槽位数」决定（~40 主 pass + ~25 阴影 pass），与建筑数量脱钩。
+  // 建造中建筑 scale 随 t.prog 逐帧变化，保留独立 Group（同屏通常仅数栋）。
+  _clearBldInst(){
+    if(this._bldInst){
+      for(const s of this._bldInst){ this.buildingGroup.remove(s.mesh); s.mesh.dispose(); }
+    }
+    this._bldInst = null; this._bldTpl = null; this._bldSlotIdx = null;
+    this._bldSigA = null; this._bldSigB = null; this._bldKept = -1;
+  }
+
+  /** 收集当前时代全部 12 个 (type×varn) 建筑模板：用伪格跑一次 makeBuilding，
+   *  读取每个 Mesh 的几何/材质/局部矩阵/阴影属性后弃壳。
+   *  几何全部来自 _geo 共享缓存、材质来自 _matCache 池，模板壳无 GPU 资源。
+   *  再按 (几何,材质,阴影属性) 聚合全局槽位，容量 = 单栋该槽位最大部件数 × MAX_BUILD_MESH。 */
+  _ensureBldBatches(era){
+    if(this._bldInst) return this._bldInst;
+    const tpl = new Map();
+    for(const [type, zone] of [['farm',2],['house',1],['church',4],['factory',3]]){
+      for(let varn=0; varn<3; varn++){
+        const grp = this.makeBuilding({ zone, variant: varn, _wx: 0, _wz: 0 }, era);
+        grp.rotation.y = 0;   // 随机朝向归入实例矩阵，模板保持零旋转
+        const parts = [];
+        for(const o of grp.children){
+          if(!o.isMesh) continue;
+          o.updateMatrix();
+          parts.push({ geo: o.geometry, mat: o.material, m: o.matrix.clone(),
+                       cast: !!o.castShadow, recv: !!o.receiveShadow });
+        }
+        tpl.set(`${type}|${varn}`, parts);
+      }
+    }
+    this._bldTpl = tpl;
+    const slots = new Map();
+    const keyOf = (p)=> `${p.geo.uuid}|${p.mat.uuid}|${p.cast?1:0}|${p.recv?1:0}`;
+    for(const parts of tpl.values()){
+      const per = new Map();
+      for(const p of parts){
+        const key = keyOf(p);
+        per.set(key, (per.get(key)||0)+1);
+        if(!slots.has(key)) slots.set(key, { geo:p.geo, mat:p.mat, cast:p.cast, recv:p.recv, perBld:0 });
+      }
+      for(const [key, cnt] of per){
+        const s = slots.get(key);
+        if(cnt > s.perBld) s.perBld = cnt;
+      }
+    }
+    this._bldInst = [];
+    this._bldSlotIdx = new Map();
+    for(const [key, s] of slots){
+      const mesh = new THREE.InstancedMesh(s.geo, s.mat, s.perBld * MAX_BUILD_MESH);
+      mesh.count = 0;
+      mesh.castShadow = s.cast;
+      mesh.receiveShadow = s.recv;
+      mesh.frustumCulled = false;      // 实例散布全图，单件几何包围球不再适用
+      mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+      this.buildingGroup.add(mesh);
+      this._bldSlotIdx.set(key, this._bldInst.length);
+      this._bldInst.push({ mesh, n: 0, cap: s.perBld * MAX_BUILD_MESH });
+    }
+    this._bldKeyOf = keyOf;
+    return this._bldInst;
+  }
+
+  /** 重填已完工建筑的实例矩阵。变化签名（双哈希，与树批次同构）不变时跳过，
+   *  避免每帧上传数十个 instanceMatrix 缓冲区。 */
+  _syncBuildBatches(G){
+    const cand = this._bldCand;
+    const n = cand.length;
+    let sigA = 0, sigB = 0;
+    for(let i=0;i<n;i++){
+      const t = cand[i];
+      const v = ((t._wx|0)*73856093) ^ ((t._wz|0)*19349663)
+        ^ (Math.round(t._wy*50)*83492791) ^ ((t.variant|0)*1274126177)
+        ^ ((t.zone|0)*2654435761);
+      sigA = (sigA*16777619 ^ v) | 0;
+      sigB = (sigB + v + 0x9e3779b9 + (sigB<<6) + (sigB>>2)) | 0;
+    }
+    if(sigA === this._bldSigA && sigB === this._bldSigB && n === this._bldKept) return;
+    this._bldSigA = sigA; this._bldSigB = sigB; this._bldKept = n;
+
+    const inst = this._ensureBldBatches(G.era);
+    for(const s of inst) s.n = 0;
+    const d = this._bldDummy;
+    const m1 = this._bldM1, m2 = this._bldM2;
+    d.rotation.set(0, 0, 0);
+    d.scale.set(1, 1, 1);
+    for(let i=0;i<n;i++){
+      const t = cand[i];
+      const type = ZONES[t.zone].noBuilding ? 'farm'
+        : t.zone === 4 ? 'church' : t.zone === 3 ? 'factory' : 'house';
+      const parts = this._bldTpl.get(`${type}|${t.variant % 3}`);
+      if(!parts) continue;
+      // 整栋矩阵：世界位置（底面埋入地表 0.02）+ 与 makeBuilding 一致的随机朝向
+      let rot = 0;
+      if(type === 'house') rot = (hash2(t._wx|0, t._wz|0, t.variant) - 0.5) * 0.10;
+      else if(type === 'factory') rot = (hash2(t._wx|0, t._wz|0, t.variant) - 0.5) * 0.06;
+      d.position.set(t._wx, t._wy - 0.02, t._wz);
+      d.rotation.y = rot;
+      d.updateMatrix();
+      m1.copy(d.matrix);
+      for(const p of parts){
+        const s = inst[this._bldSlotIdx.get(this._bldKeyOf(p))];
+        if(s.n >= s.cap) continue;   // 容量保护（抽样上限内理论不可达）
+        m2.multiplyMatrices(m1, p.m);
+        s.mesh.setMatrixAt(s.n, m2);
+        s.n++;
+      }
+    }
+    for(const s of inst){
+      s.mesh.count = s.n;
+      s.mesh.instanceMatrix.needsUpdate = true;
+    }
+  }
+
   makeWonder(era, prog){
     const grp = new THREE.Group();
     if(era===0){
@@ -1220,6 +1375,7 @@ export class Renderer {
     let zi = 0;
     const seenB = new Set();
     this._treeCand.length = 0;   // P2-A：树候选格每帧重收集，统一抽样合批
+    this._bldCand.length = 0;    // P3-A：已完工建筑格每帧重收集，统一写入槽位实例批次
 
     // #25 性能：原「坐标预计算 / 建筑 / 树」共 4 趟全图遍历合并为 1 趟；
     // _wy 需 5 次 getTile 求邻域均值，只在真正要摆网格（有划定或长树）的格上计算，
@@ -1235,20 +1391,32 @@ export class Renderer {
         const key = `${x},${y}`;
         seenB.add(key);
         const idx = zi++;
-        const show = step === 1 || (idx % step === 0) || this.buildingMeshes.has(key);
-        if(show){
-          if(!this.buildingMeshes.has(key)){
-            const m = this.makeBuilding(t, G.era);
-            if(m){ this.buildingGroup.add(m); this.buildingMeshes.set(key, m); }
-          }
+        // P3-A：完工建筑（缩放恒为 1、朝向可由哈希复算）走槽位实例批次，
+        // 与建筑总数脱钩；建造中建筑需要逐栋进度缩放，仍保留独立网格（同屏仅数栋）。
+        if(t.built){
           const m = this.buildingMeshes.get(key);
           if(m){
-            // 底面略埋入地表 0.02，避免缝隙；高度用邻域均值
-            m.position.set(t._wx, t._wy - 0.02, t._wz);
-            m.visible = true;
-            const prog = t.built ? 1 : Math.max(0.15, t.prog);
-            const zs = ZONES[t.zone];
-            m.scale.setScalar(zs.noBuilding ? (0.55+prog*0.45) : (0.35 + prog*0.65));
+            // 建造中→完工：释放独立网格（几何全部来自 _geo 共享缓存，无需 dispose）
+            this.buildingGroup.remove(m);
+            this.buildingMeshes.delete(key);
+          }
+          if(step === 1 || (idx % step === 0)) this._bldCand.push(t);
+        } else {
+          const show = step === 1 || (idx % step === 0) || this.buildingMeshes.has(key);
+          if(show){
+            if(!this.buildingMeshes.has(key)){
+              const m = this.makeBuilding(t, G.era);
+              if(m){ this.buildingGroup.add(m); this.buildingMeshes.set(key, m); }
+            }
+            const m = this.buildingMeshes.get(key);
+            if(m){
+              // 底面略埋入地表 0.02，避免缝隙；高度用邻域均值
+              m.position.set(t._wx, t._wy - 0.02, t._wz);
+              m.visible = true;
+              const prog = Math.max(0.15, t.prog);
+              const zs = ZONES[t.zone];
+              m.scale.setScalar(zs.noBuilding ? (0.55+prog*0.45) : (0.35 + prog*0.65));
+            }
           }
         }
       }
@@ -1263,6 +1431,7 @@ export class Renderer {
       if(!seenB.has(key)){ this.buildingGroup.remove(m); this.buildingMeshes.delete(key); }
     }
     this._syncTreeBatches(G);
+    this._syncBuildBatches(G);
 
     // 奇迹
     // G-09 修复：原实现只增不删——读档换世界 / 奇迹从 wonderList 移除后，
@@ -1392,36 +1561,124 @@ export class Renderer {
 
   setNpcCount(n, G){
     const target = Math.max(0, n|0);
-    const pool = this.npcGroup.children;
-    const prev = pool.length;
+    const npcs = this._npcs;
+    const prev = npcs.length;
 
     if(prev !== target) this._npcHomesDirty = true;
 
-    // 增员
-    while(pool.length < target){
-      const folkCol = FOLKCOL[G.era];
-      const grp = this._makeVillager(folkCol, pool.length);
+    // 增员：只追加纯数据状态记录，网格由实例批次统一承载
+    while(npcs.length < target){
       const home = this._randomHome(G);
-      const u = grp.userData;
-      u.hx = home[0]; u.hz = home[1];
-      u.state = 'idle';
-      u.tx = home[0]; u.tz = home[1];
-      u.st = 0; u.wait = 0.4 + Math.random()*2;
-      grp.position.set(home[0], 0, home[1]);
-      this.npcGroup.add(grp);
+      npcs.push({
+        x: home[0], y: 0, z: home[1], rot: 0, sw: 0,
+        hx: home[0], hz: home[1], tx: home[0], tz: home[1],
+        state: 'idle', st: 0, wait: 0.4 + Math.random()*2,
+        spd: 0.55+Math.random()*0.45,
+        phase: Math.random()*Math.PI*2,
+        bag: (npcs.length % 2 === 1)      // 原 _makeVillager(variant) 的奇偶挎包规则
+      });
     }
     // 减员
-    while(pool.length > target){
-      this.npcGroup.remove(pool[pool.length-1]);
-    }
+    if(npcs.length > target) npcs.length = target;
 
-    // 仅在人数变化或换时代时刷衣色（避免每帧全池扫描）
-    const folkCol = FOLKCOL[G.era];
-    if(this._npcEra !== G.era || prev !== target){
-      this._npcEra = G.era;
-      for(const m of pool){
-        if(m.userData.clothMat) m.userData.clothMat.color.set(folkCol);
+    this._ensureNpcBatches(Math.min(MAX_NPC_INST, Math.max(1, npcs.length)));
+    this._npcApplyEra(G);       // 仅在人数变化或换时代时刷配色（避免每帧全池扫描）
+    this._writeNpcInstances();  // 立刻落位，避免新批次首帧出现在原点
+  }
+
+  /** 按时代取四套共享材质（_mat 走缓存池，不可 dispose） */
+  _npcMatsFor(era){
+    const e = Math.max(0, Math.min(4, era|0));
+    const folkCol = FOLKCOL[e];
+    return {
+      cloth: this._mat(folkCol),
+      dark:  this._mat(lerpHex(folkCol, 0x2a2018, 0.35)),
+      skin:  this._mat(FOLK_HEAD),
+      bag:   this._mat(0x8b5a2b)
+    };
+  }
+
+  /** 创建/扩容 6 个村民部件批次；容量足够时直接复用 */
+  _ensureNpcBatches(cap){
+    const cur = this._npcInst;
+    if(cur && cur.cap >= cap) return cur;
+    if(cur){
+      for(const d of NPC_BATCH_DEFS){ this.npcGroup.remove(cur.b[d.k]); cur.b[d.k].dispose(); }
+    }
+    const mats = this._npcMatsFor(this._npcEra);
+    const b = {};
+    for(const d of NPC_BATCH_DEFS){
+      const mesh = new THREE.InstancedMesh(this._geo[d.geo], mats[d.mat], cap * d.mul);
+      mesh.count = 0;
+      mesh.castShadow = d.cast;
+      mesh.frustumCulled = false;   // 村民散布全图，单件几何包围球不再适用
+      mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+      this.npcGroup.add(mesh);
+      b[d.k] = mesh;
+    }
+    this._npcInst = { cap, b, mats };
+    return this._npcInst;
+  }
+
+  /** 换时代：整体替换批次材质。
+   *  旧实现直接改 clothMat.color——而 _mat 是按颜色缓存的共享材质，
+   *  那会污染上一代配色的缓存条目；改为换引用后缓存池保持干净。 */
+  _npcApplyEra(G){
+    if(this._npcEra === G.era) return;
+    this._npcEra = G.era;
+    const inst = this._npcInst;
+    if(!inst) return;             // 批次尚未创建：创建时按 _npcEra 取色
+    const mats = this._npcMatsFor(G.era);
+    inst.mats = mats;
+    for(const d of NPC_BATCH_DEFS) inst.b[d.k].material = mats[d.mat];
+  }
+
+  /** 每帧全量重写实例矩阵：整体矩阵 × pivot 矩阵 × 部件局部偏移 */
+  _writeNpcInstances(){
+    const inst = this._npcInst;
+    if(!inst) return;
+    const npcs = this._npcs;
+    const n = npcs.length;
+    const d = this._npcDummy, p = this._npcPivot;
+    const m1 = this._npcM1, m2 = this._npcM2;
+    d.scale.set(1,1,1); p.scale.set(1,1,1);
+    let bagI = 0;
+    for(let i=0;i<n;i++){
+      const u = npcs[i];
+      d.position.set(u.x, u.y, u.z);
+      d.rotation.set(0, u.rot, 0);
+      d.updateMatrix();
+      const sw = u.sw;
+      // 双腿：pivot(±0.045, 0.16, 0)，左腿 +sw / 右腿 -sw（反相）
+      // 双臂：pivot(±0.13, 0.36, 0)，左臂 -sw*0.85 / 右臂 +sw*0.85（与腿反相）
+      for(let s=0;s<2;s++){
+        const side = s === 0 ? -1 : 1;
+        p.position.set(side*0.045, 0.16, 0);
+        p.rotation.set(-side*sw, 0, 0);
+        p.updateMatrix();
+        m1.multiplyMatrices(d.matrix, p.matrix);
+        m2.multiplyMatrices(m1, NPC_LOCAL.leg);
+        inst.b.leg.setMatrixAt(i*2+s, m2);
+
+        p.position.set(side*0.13, 0.36, 0);
+        p.rotation.set(side*sw*0.85, 0, 0);
+        p.updateMatrix();
+        m1.multiplyMatrices(d.matrix, p.matrix);
+        m2.multiplyMatrices(m1, NPC_LOCAL.arm);
+        inst.b.arm.setMatrixAt(i*2+s, m2);
       }
+      m1.multiplyMatrices(d.matrix, NPC_LOCAL.torso); inst.b.torso.setMatrixAt(i, m1);
+      m1.multiplyMatrices(d.matrix, NPC_LOCAL.head);  inst.b.head.setMatrixAt(i, m1);
+      m1.multiplyMatrices(d.matrix, NPC_LOCAL.hair);  inst.b.hair.setMatrixAt(i, m1);
+      if(u.bag){
+        m1.multiplyMatrices(d.matrix, NPC_LOCAL.bag);
+        inst.b.bag.setMatrixAt(bagI++, m1);
+      }
+    }
+    for(const def of NPC_BATCH_DEFS){
+      const mesh = inst.b[def.k];
+      mesh.count = def.k === 'bag' ? bagI : n * def.mul;
+      mesh.instanceMatrix.needsUpdate = true;
     }
   }
 
@@ -1440,44 +1697,45 @@ export class Renderer {
 
   updateNpcs(dt, G){
     if(this._npcHomesDirty) this._refreshHomes(G);
+    const npcs = this._npcs;
     const b = chunkBounds(G);
     const minX = b.minX*TILE + 0.4, maxX = b.maxX*TILE - 0.4;
     const minZ = b.minY*TILE + 0.4, maxZ = b.maxY*TILE - 0.4;
 
-    for(const m of this.npcGroup.children){
-      const u = m.userData;
+    for(let i=0;i<npcs.length;i++){
+      const u = npcs[i];
       u.st += dt;
       u.phase += dt;
 
       // 落水 / 虚空 → 立刻回岸
-      if(!this._npcLand(G, m.position.x, m.position.z)){
+      if(!this._npcLand(G, u.x, u.z)){
         const home = this._randomHome(G);
         u.hx = home[0]; u.hz = home[1];
         u.tx = home[0]; u.tz = home[1];
         u.state = 'idle'; u.st = 0; u.wait = 0.4 + Math.random();
-        m.position.x = home[0]; m.position.z = home[1];
-        this._placeNpcY(m, G, 0);
+        u.x = home[0]; u.z = home[1];
+        this._placeNpcY(u, G, 0);
         continue;
       }
 
       if(u.state === 'walk'){
-        const dx = u.tx - m.position.x;
-        const dz = u.tz - m.position.z;
-        const d = Math.hypot(dx, dz);
-        if(d < 0.12 || u.st > 5.5){
+        const dx = u.tx - u.x;
+        const dz = u.tz - u.z;
+        const dist = Math.hypot(dx, dz);
+        if(dist < 0.12 || u.st > 5.5){
           u.state = 'idle';
           u.st = 0;
           u.wait = 0.7 + Math.random()*3.2;
         } else {
-          const step = Math.min(d, u.spd * dt);
-          const nx = m.position.x + (dx/d)*step;
-          const nz = m.position.z + (dz/d)*step;
+          const step = Math.min(dist, u.spd * dt);
+          const nx = u.x + (dx/dist)*step;
+          const nz = u.z + (dz/dist)*step;
           if(!this._npcLand(G, nx, nz)){
             u.state = 'idle'; u.st = 0; u.wait = 0.25;
           } else {
-            m.position.x = nx;
-            m.position.z = nz;
-            m.rotation.y = Math.atan2(dx, dz);
+            u.x = nx;
+            u.z = nz;
+            u.rot = Math.atan2(dx, dz);
           }
         }
       } else {
@@ -1497,95 +1755,27 @@ export class Renderer {
         }
       }
 
-      // 四肢
+      // 四肢摆动角（写入状态，由 _writeNpcInstances 复合进实例矩阵）
       const walking = u.state === 'walk';
-      if(u.legL){
-        const sw = walking ? Math.sin(u.phase*9)*0.55 : Math.sin(u.phase*1.5)*0.04;
-        u.legL.rotation.x = sw;
-        u.legR.rotation.x = -sw;
-        u.armL.rotation.x = -sw*0.85;
-        u.armR.rotation.x = sw*0.85;
-      }
-      this._placeNpcY(m, G, walking ? Math.abs(Math.sin(u.phase*9))*0.03 : 0);
+      u.sw = walking ? Math.sin(u.phase*9)*0.55 : Math.sin(u.phase*1.5)*0.04;
+      this._placeNpcY(u, G, walking ? Math.abs(Math.sin(u.phase*9))*0.03 : 0);
     }
+    this._writeNpcInstances();
   }
 
-  _placeNpcY(m, G, bob){
-    const tx = Math.round(m.position.x / TILE);
-    const ty = Math.round(m.position.z / TILE);
+  _placeNpcY(u, G, bob){
+    const tx = Math.round(u.x / TILE);
+    const ty = Math.round(u.z / TILE);
     const tile = getTile(G, tx, ty);
     const ground = !tile
       ? sampleHeight(tx, ty, G.seed)
       : (tile.water ? WATER_Y : this._surfaceY(G, tx, ty));
-    m.position.y = ground + bob;
+    u.y = ground + bob;
   }
 
-  // 低多边形村民：腿+躯干+双臂+头+发髻/挎包
-  _makeVillager(folkCol, variant){
-    const grp = new THREE.Group();
-    const skin = this._mat(FOLK_HEAD);
-    const cloth = this._mat(folkCol);
-    const dark = this._mat(lerpHex(folkCol, 0x2a2018, 0.35));
-
-    // 腿（髋部为 pivot）
-    const legLg = new THREE.Group(); legLg.position.set(-0.045, 0.16, 0);
-    const legL = new THREE.Mesh(this._geo.leg, dark);
-    legL.position.y = -0.08;
-    legL.castShadow = true;
-    legLg.add(legL);
-    const legRg = new THREE.Group(); legRg.position.set(0.045, 0.16, 0);
-    const legR = new THREE.Mesh(this._geo.leg, dark);
-    legR.position.y = -0.08;
-    legR.castShadow = true;
-    legRg.add(legR);
-    grp.add(legLg); grp.add(legRg);
-
-    // 躯干
-    const torso = new THREE.Mesh(this._geo.torso, cloth);
-    torso.position.y = 0.28;
-    torso.castShadow = true;
-    grp.add(torso);
-
-    // 手臂（肩为 pivot）
-    const armLg = new THREE.Group(); armLg.position.set(-0.13, 0.36, 0);
-    const armL = new THREE.Mesh(this._geo.arm, cloth);
-    armL.position.y = -0.07;
-    armL.castShadow = true;
-    armLg.add(armL);
-    const armRg = new THREE.Group(); armRg.position.set(0.13, 0.36, 0);
-    const armR = new THREE.Mesh(this._geo.arm, cloth);
-    armR.position.y = -0.07;
-    armR.castShadow = true;
-    armRg.add(armR);
-    grp.add(armLg); grp.add(armRg);
-
-    // 头 + 发
-    const head = new THREE.Mesh(this._geo.head, skin);
-    head.position.y = 0.46;
-    head.castShadow = true;
-    grp.add(head);
-    const hair = new THREE.Mesh(this._geo.hair, dark);
-    hair.position.y = 0.48;
-    hair.castShadow = true;
-    grp.add(hair);
-
-    // 变体：挎包 / 小背包
-    if(variant % 2 === 1){
-      const bag = new THREE.Mesh(this._geo.satchel, this._mat(0x8b5a2b));
-      bag.position.set(0.1, 0.28, 0.06);
-      grp.add(bag);
-    }
-
-    grp.userData = {
-      legL: legLg, legR: legRg, armL: armLg, armR: armRg,
-      torso, clothMat: cloth,
-      hx: 0, hz: 0, tx: 0, tz: 0,
-      state: 'idle', st: Math.random()*2, wait: 1+Math.random()*3,
-      spd: 0.55+Math.random()*0.45,
-      phase: Math.random()*Math.PI*2
-    };
-    return grp;
-  }
+  // P3-B：原 _makeVillager（每人一个 Group、8 个 Mesh）已移除，
+  // 改由 NPC_BATCH_DEFS 定义的 6 个 InstancedMesh 批次承载；
+  // 部件尺寸沿用 _buildGeo 共享几何，局部偏移见 NPC_LOCAL，动画由 _writeNpcInstances 复合。
 
   // #24 style: 'ok' 可放置（金）| 'bad' 不可放置（红）| 'demolish' 可拆除（橙）| 'none' 隐藏
   setHover(x, y, G, style){
@@ -1634,12 +1824,12 @@ export class Renderer {
     if(this.waterMesh) this.waterMesh.material.color.set(p.water);
     for(const [,m] of this.buildingMeshes) this.buildingGroup.remove(m);
     this.buildingMeshes.clear();
-    for(const m of this.npcGroup.children){
-      const cloth = m.userData.clothMat || m.userData.torso?.material;
-      if(cloth) cloth.color.set(FOLKCOL[G.era]);
-    }
+    // P3-B：村民批次改为按时代整体换材质引用（旧实现改共享材质颜色会污染 _mat 缓存池）
+    this._npcApplyEra(G);
     // P2-A：树批次材质含时代叶色，时代切换时整批重建（下一帧 syncWorld 自动重填）
     this._clearTreeInst();
+    // P3-A：建筑槽位批次的几何/材质同样按时代取色，切换时整批重建
+    this._clearBldInst();
     this.terrainDirty = true;
   }
 
