@@ -5,8 +5,9 @@ import { TILE, MIRACLES, WONDERS, ERAS, AUTO, TOOLS, MILESTONES, ZONES,
 import { createState, housingCap, faithMult, serializeState, serializeStateAsync, deserializeState,
   refreshBuiltCache, invalidateBuiltCache, getTile, eachTile } from './state.js';
 import { genWorld, applyTool, findAutoSite, placeDistrict, placeIndustryBatch, clearTreesNearZones, ensureChunkRing,
-  canPlaceZoneManual } from './terrain.js';
+  canPlaceZoneManual, placeAt, ensureChunk } from './terrain.js';
 import * as F from './formulas.js';
+import * as Sfx from './audio.js';
 import { Renderer } from './render.js';
 import { UI } from './ui.js';
 import * as Auth from './auth.js';
@@ -379,6 +380,26 @@ function startGame(){
     setTimeout(()=>toast('③ 底部进阶条看条件，满足后可进阶'), 5600);
     localStorage.setItem('td_tutorial', '1');
   }
+  // 调试面板：仅 ?debug=1 显示（规划书 §4.4）
+  if(PERF_ON){
+    document.getElementById('debugPanel')?.classList.remove('hidden');
+    document.getElementById('dbgGive')?.addEventListener('click', debugGive);
+    document.getElementById('dbgFill')?.addEventListener('click', debugFill);
+    document.getElementById('dbgEra')?.addEventListener('click', debugSetEra);
+    // 压测探针：相机直接传送（绕开 dt clamp，软件渲染 ~1fps 时 WASD 平移几乎无效），
+    // 并预生成目标点 3×3 区块，保证 getTile/placeWonder 能命中
+    window.__tdPan = (x, y)=>{
+      ensureChunkRing(G, x, y);
+      R.panCameraTo(x, y);
+    };
+  }
+  // 静音按钮：图标反映当前状态
+  const muteBtn = document.getElementById('muteBtn');
+  if(muteBtn){
+    const syncMuteIcon = ()=>{ muteBtn.textContent = Sfx.isMuted() ? '🔇 音' : '🔊 音'; };
+    syncMuteIcon();
+    muteBtn.addEventListener('click', ()=>{ Sfx.setMuted(!Sfx.isMuted()); syncMuteIcon(); });
+  }
 }
 
 // R8：周期自动保存 + 离开前保存
@@ -424,7 +445,8 @@ function loop(now){
   if(G.started && !G.over && !G.paused){
     const camTool = G.tool === 'cam_rot' || G.tool === 'cam_pan';
     if(G.painting && G.hover && !camTool){
-      applyTool(G, G.hover[0], G.hover[1], gdt);
+      const r = applyTool(G, G.hover[0], G.hover[1], gdt);
+      if(r === 'ok') Sfx.sfxPlace();
     }
     tick(gdt);
     tryAutosave(dt);
@@ -588,6 +610,7 @@ function tick(dt){
       if(w.prog>=1){
         w.prog=1; w.done=true; G.wonders[w.era]=true;
         R.spawnBurst(w.x*TILE, w.y*TILE, 0xffd54f, 40);
+        Sfx.sfxWonder();
         toast(`${WONDERS[w.era].name}建成！${WONDERS[w.era].bonus}`);
         wonderChanged = true;
         checkFinalWin();
@@ -864,7 +887,85 @@ function advanceEra(){
   }
   toast(`迈入「${ERAS[G.era].name}」！`);
   logPush(G, 30, 0, 0);
+  Sfx.sfxEra();
   // R5：不再强制 over；仅 E5 太空电梯通关
+}
+
+// ---- 调试面板（仅 ?debug=1，规划书 §4.4）----
+// 用于快速验证时代进阶、高人口渲染、奇迹产能占用等，不进入正常游戏循环。
+function debugGive(){
+  G.power = powerMaxOf(G.era);
+  G.faith = faithCapOf(G.era);
+  G.stars = ERAS[G.era].starCost;
+  updateUI();
+  toast('调试：神力/信仰/星星已补满');
+}
+
+function debugFill(){
+  const E = F.eraIndex(G);
+  const CAP = 2000; // 每类封顶，避免 E5 刷数万建筑卡死渲染
+  const targets = {
+    1: Math.min(F.buildingHigh(E, 1), CAP),
+    2: Math.min(F.buildingHigh(E, 2), CAP),
+    4: Math.min(F.buildingHigh(E, 4), CAP),
+    3: Math.min(Math.max(F.buildingHigh(E, 3), Math.ceil(F.gateOf(E) * 1.2 / F.NUM.K_IND)), CAP),
+  };
+  const total = targets[1] + targets[2] + targets[3] + targets[4];
+  // 可建平地经验占比 ~12%（噪声地形剔除水面/山地后），step1 密铺所需扫描边长
+  const side = Math.ceil(Math.sqrt(total / 0.12) * 1.2);
+  const limit = Math.max(20, Math.ceil((side - 1) / 2));
+  const chunkR = Math.ceil(limit / 10) + 1;
+  for(let cx = -chunkR; cx <= chunkR; cx++)
+    for(let cy = -chunkR; cy <= chunkR; cy++)
+      ensureChunk(G, cx, cy);
+  const placed = { 1:0, 2:0, 3:0, 4:0 };
+  // 两轮交替：先「居住+工业」再「农田+宗教」，避免单一类型占尽平地导致后续类型断供
+  for(const [za, zb] of [[1, 3], [2, 4]]){
+    const needA = targets[za], needB = targets[zb];
+    for(let y = -limit; y <= limit && (placed[za] < needA || placed[zb] < needB); y++){
+      for(let x = -limit; x <= limit && (placed[za] < needA || placed[zb] < needB); x++){
+        const t = getTile(G, x, y);
+        if(!t || t.zone > 0 || t.water || t.h < 0.95 || t.h > 5.4) continue;
+        const z = placed[za] < needA ? za : (placed[zb] < needB ? zb : 0);
+        if(z && placeAt(G, x, y, z, 'manual')) placed[z]++;
+      }
+    }
+  }
+  // 96% 置为建成，4% 在建（模拟真实施工状态）
+  let idx = 0;
+  eachTile(G, (t)=>{
+    if(t.zone > 0){
+      idx++;
+      if(idx % 25 !== 0){ t.built = true; t.prog = 1; }
+      else { t.built = false; t.prog = 0.5; }
+    }
+  });
+  G.terrainDirty = true;
+  refreshBuiltCache(G);
+  R.syncWorld(G);
+  syncNpc();
+  updateUI();
+  toast(`调试刷建筑：居${placed[1]} 田${placed[2]} 工${placed[3]} 教${placed[4]}`);
+}
+
+function debugSetEra(){
+  if(G.era >= 4){ toast('调试：已是最终时代，建成太空电梯即通关'); return; }
+  const E = G.era;
+  // R5：E1（era=0）进阶不需要奇迹，E2 起才需要
+  if(E >= 1 && !G.wonders[E]){
+    G.faith = faithCapOf(G.era); // 直接补满（cap = 2×cost，必然够放奇迹）
+    updateUI();
+    toast('调试：信仰已补满，请点「奇迹」按钮放置本时代奇迹后重试跳时代');
+    return;
+  }
+  G.pop = Math.max(G.pop, ERAS[E].popGoal);
+  G.stars = ERAS[E].starCost;
+  if(!eraReady()){
+    updateUI();
+    toast('调试：人口/星星已补，但产能未达门槛——请先点「刷建筑」');
+    return;
+  }
+  advanceEra();
 }
 
 /** E5 太空电梯完工 → 通关 */
@@ -906,7 +1007,8 @@ function handleDown(px, py, button){
   // 单击立刻放一格；拖动由 loop 连续 applyTool
   // G-06：单击失败给出原因提示（拖动路径靠悬停环配色反馈，不弹 toast 防刷屏）
   const r = applyTool(G, cell[0], cell[1], 0.05);
-  if(r && r !== 'ok') toast(TOOL_FAIL_MSG[r] || '无法在此操作');
+  if(r === 'ok') Sfx.sfxPlace();
+  else if(r) toast(TOOL_FAIL_MSG[r] || '无法在此操作');
 }
 
 // G-06：applyTool 失败原因码 → 玩家可读提示
@@ -1070,5 +1172,9 @@ function mountVersionTag(){
   for(const el of document.querySelectorAll('.ico,.t-ico,.m-ico,.g-caret')) el.setAttribute('aria-hidden', 'true');
 }
 mountVersionTag();
+
+// 音频自动播放策略：首次用户手势解锁 AudioContext（规划书 §4.3）
+window.addEventListener('pointerdown', ()=>Sfx.unlockAudio(), { once:true });
+window.addEventListener('keydown', ()=>Sfx.unlockAudio(), { once:true });
 
 boot();

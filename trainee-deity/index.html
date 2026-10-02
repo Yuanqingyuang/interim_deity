@@ -145,6 +145,7 @@
       <span id="dayVal">☀ 白昼</span>
     </div>
     <div class="spacer"></div>
+    <button id="muteBtn" class="btn-save" title="声音开关" aria-label="声音开关">🔊 音</button>
     <button id="quickSaveBtn" class="btn-save" title="快速保存" aria-label="快速保存">⚡ 存</button>
     <button id="pauseBtn" class="btn-save" title="暂停菜单" aria-label="打开暂停菜单">⏸ 菜单</button>
   </div>
@@ -227,6 +228,12 @@
   </div>
 
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  <!-- 调试面板：仅 ?debug=1 显示（规划书 §4.4） -->
+  <div id="debugPanel" class="debug-pan hidden">
+    <button id="dbgGive" class="btn-mini">刷资源</button>
+    <button id="dbgFill" class="btn-mini">刷建筑</button>
+    <button id="dbgEra" class="btn-mini">跳时代</button>
+  </div>
   <div id="perfHud" class="perf-hud hidden" aria-hidden="true"></div>
   <div id="loader" class="loader" role="status" aria-live="polite">正在凝聚神力…</div>
 
