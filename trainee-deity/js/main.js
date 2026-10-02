@@ -392,6 +392,8 @@ function startGame(){
       ensureChunkRing(G, x, y);
       R.panCameraTo(x, y);
     };
+    // 压测探针：暴露状态 / 渲染器 / 场景分组，供 DrawCall 构成剖析（P2-A 归因验证）
+    window.__tdDbg = { get G(){ return G; }, R };
     // 压测探针：程序化放置本时代奇迹。
     // 斜视角下屏幕中心的射线落点会远离 controls.target（常落在水面或未生成区块），
     // 自动化点击放置极不稳定；这里在「已生成区块」内找距相机最近的合法格，

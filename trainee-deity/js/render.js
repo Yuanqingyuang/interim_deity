@@ -7,7 +7,7 @@ import {
   TILE, WATER_LEVEL, WILD, FOG_NEAR, FOG_FAR,
   PALETTES, BUILDING_STYLE, ZONES, FOLKCOL, FOLK_HEAD,
   CHURCH_STYLE, FACTORY_STYLE, CHUNK, FARM_CROP, FARM_SOIL, churchStyleForEra, factoryStyleForEra,
-  sampleSun, lerpHex, hash2, mulberry32, MAX_BUILD_MESH
+  sampleSun, lerpHex, hash2, mulberry32, MAX_BUILD_MESH, MAX_TREE_MESH
 } from './config.js';
 import { cornerColor, heightAt, riverMask, sampleHeight } from './terrain.js';
 import { getTile, eachTile, chunkBounds, tileLive } from './state.js';
@@ -99,8 +99,12 @@ export class Renderer {
     this.wonderGroup = new THREE.Group(); this.scene.add(this.wonderGroup);
     this.decoGroup = new THREE.Group(); this.scene.add(this.decoGroup);
     this.buildingMeshes = new Map();
-    this.treeMeshes = new Map();
     this.wonderMeshes = new Map();
+    // P2-A 植被合批：区块内树不再逐棵建 Group，而是按部件合入 5 个 InstancedMesh 批次
+    this._treeCand = [];       // 每帧收集的候选树格（复用数组，避免逐帧分配）
+    this._treeInst = null;     // {trunk,cone,mid,ico,bush} 批次缓存（时代切换时重建）
+    this._treeDummy = new THREE.Object3D();
+    this._treeSigA = null; this._treeSigB = null; this._treeKept = -1;
     this.terrainDirty = true;
     this._npcHomes = [];
     this._npcHomesDirty = true;
@@ -1041,36 +1045,91 @@ export class Renderer {
     return grp;
   }
 
-  makeTree(h, era, variant=0){
-    const p = PALETTES[era];
-    const grp = new THREE.Group();
-    const trunk = new THREE.Mesh(this._geo.treeTrunk, this._mat(0x6d4c2a));
-    trunk.position.y = 0.2; trunk.castShadow = true;
-    grp.add(trunk);
+  // ---- P2-A 植被合批：区块内树按 5 个部件批次 InstancedMesh 绘制 ----
+  // 原 makeTree 每棵建独立 Group（2-4 个 Mesh 且逐个 castShadow），高人口下 DrawCall
+  // 爆炸（压测峰值 9632，移动端红线 <2000）。合批后树数量不再影响 DrawCall（恒定 ~5+5）。
+  // 几何/材质全部来自 _geo 与 _matCache 共享池，清理时只 dispose 实例缓冲区本身。
+  _clearTreeInst(){
+    if(!this._treeInst) return;
+    for(const m of Object.values(this._treeInst)){ this.treeGroup.remove(m); m.dispose(); }
+    this._treeInst = null;
+    this._treeSigA = null; this._treeSigB = null; this._treeKept = -1;
+  }
 
-    const kind = variant % 3;
-    if(kind === 0){
-      const top = new THREE.Mesh(this._geo.treeTop, this._mat(p.tree));
-      top.position.y = 0.88; top.scale.setScalar(0.7 + h*0.1);
-      top.castShadow = true; grp.add(top);
-    } else if(kind === 1){
-      // 双层球冠
-      const mid = new THREE.Mesh(this._geo.treeMid, this._mat(p.tree));
-      mid.position.y = 0.55; mid.castShadow = true;
-      const top = new THREE.Mesh(this._geo.treeTop2, this._mat(p.tree));
-      top.position.y = 0.85; top.scale.setScalar(0.75 + h*0.08);
-      top.castShadow = true;
-      grp.add(mid); grp.add(top);
-    } else {
-      // 灌木状 + 小石
-      const bush = new THREE.Mesh(this._geo.bush, this._mat(p.tree));
-      bush.position.y = 0.28; bush.scale.set(1.2, 0.9, 1.2);
-      bush.castShadow = true;
-      const bush2 = new THREE.Mesh(this._geo.bush, this._mat(p.tree));
-      bush2.position.set(0.28, 0.18, 0.15);
-      grp.add(bush); grp.add(bush2);
+  _ensureTreeBatches(G){
+    if(this._treeInst) return this._treeInst;
+    const p = PALETTES[G.era];
+    const trunkMat = this._mat(0x6d4c2a);
+    const leafMat = this._mat(p.tree);
+    const cap = MAX_TREE_MESH;
+    const mk = (geo, mat, capacity)=>{
+      const m = new THREE.InstancedMesh(geo, mat, capacity);
+      m.count = 0;
+      m.castShadow = true;               // 与原逐棵 castShadow 视觉一致
+      m.receiveShadow = true;
+      m.frustumCulled = false;           // 实例散布全图，单件几何包围球不再适用
+      m.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+      this.treeGroup.add(m);
+      return m;
+    };
+    this._treeInst = {
+      trunk: mk(this._geo.treeTrunk, trunkMat, cap),
+      cone:  mk(this._geo.treeTop,   leafMat,  cap),
+      mid:   mk(this._geo.treeMid,   leafMat,  cap),
+      ico:   mk(this._geo.treeTop2,  leafMat,  cap),
+      bush:  mk(this._geo.bush,      leafMat,  cap*2),
+    };
+    return this._treeInst;
+  }
+
+  /** 对 _treeCand 做确定性抽样（与建筑 MAX_BUILD_MESH 抽样同构），再重填实例矩阵。
+   *  变化签名（双哈希）不变时跳过重填，避免每帧上传 instanceMatrix。 */
+  _syncTreeBatches(G){
+    const cand = this._treeCand;
+    const n = cand.length;
+    const tstep = n > MAX_TREE_MESH ? Math.ceil(n / MAX_TREE_MESH) : 1;
+    let sigA = 0, sigB = 0, kept = 0;
+    for(let i=0;i<n;i+=tstep){
+      const t = cand[i];
+      const v = ((t._wx|0)*73856093) ^ ((t._wz|0)*19349663)
+        ^ (Math.round(t._wy*50)*83492791) ^ (Math.round(t.h*20)*25569)
+        ^ ((t.variant|0)*1274126177);
+      sigA = (sigA*16777619 ^ v) | 0;
+      sigB = (sigB + v + 0x9e3779b9 + (sigB<<6) + (sigB>>2)) | 0;
+      kept++;
     }
-    return grp;
+    if(sigA === this._treeSigA && sigB === this._treeSigB && kept === this._treeKept) return;
+    this._treeSigA = sigA; this._treeSigB = sigB; this._treeKept = kept;
+
+    const inst = this._ensureTreeBatches(G);
+    const d = this._treeDummy;
+    d.rotation.set(0, 0, 0);
+    const put = (mesh, idx, x, y, z, sx, sy, sz)=>{
+      d.position.set(x, y, z);
+      d.scale.set(sx, sy !== undefined ? sy : sx, sz !== undefined ? sz : sx);
+      d.updateMatrix();
+      mesh.setMatrixAt(idx, d.matrix);
+    };
+    let nTrunk=0, nCone=0, nMid=0, nIco=0, nBush=0;
+    for(let i=0;i<n;i+=tstep){
+      const t = cand[i];
+      const bx = t._wx, by = t._wy - 0.05, bz = t._wz;
+      const h = t.h;
+      put(inst.trunk, nTrunk++, bx, by+0.2, bz, 1);
+      const kind = (t.variant|0) % 3;
+      if(kind === 0){
+        put(inst.cone, nCone++, bx, by+0.88, bz, 0.7 + h*0.1);
+      } else if(kind === 1){
+        put(inst.mid, nMid++, bx, by+0.55, bz, 1);
+        put(inst.ico, nIco++, bx, by+0.85, bz, 0.75 + h*0.08);
+      } else {
+        put(inst.bush, nBush++, bx, by+0.28, bz, 1.2, 0.9, 1.2);
+        put(inst.bush, nBush++, bx+0.28, by+0.18, bz+0.15, 1);
+      }
+    }
+    inst.trunk.count = nTrunk; inst.cone.count = nCone; inst.mid.count = nMid;
+    inst.ico.count = nIco; inst.bush.count = nBush;
+    for(const m of Object.values(inst)) m.instanceMatrix.needsUpdate = true;
   }
 
   makeWonder(era, prog){
@@ -1160,7 +1219,7 @@ export class Renderer {
     const step = zoneCount > MAX_BUILD_MESH ? Math.ceil(zoneCount / MAX_BUILD_MESH) : 1;
     let zi = 0;
     const seenB = new Set();
-    const seenT = new Set();
+    this._treeCand.length = 0;   // P2-A：树候选格每帧重收集，统一抽样合批
 
     // #25 性能：原「坐标预计算 / 建筑 / 树」共 4 趟全图遍历合并为 1 趟；
     // _wy 需 5 次 getTile 求邻域均值，只在真正要摆网格（有划定或长树）的格上计算，
@@ -1195,23 +1254,15 @@ export class Renderer {
       }
 
       if(isTree){
-        const key = `${x},${y}`;
-        seenT.add(key);
-        if(!this.treeMeshes.has(key)){
-          const m = this.makeTree(t.h, G.era, t.variant);
-          this.treeGroup.add(m); this.treeMeshes.set(key,m);
-        }
-        const m = this.treeMeshes.get(key);
-        if(m) m.position.set(t._wx, t._wy - 0.05, t._wz);
+        // P2-A：不再逐棵建 Group，先收集候选格（_wx/_wy/_wz 已就绪），遍历后统一合批
+        this._treeCand.push(t);
       }
     });
 
     for(const [key, m] of this.buildingMeshes){
       if(!seenB.has(key)){ this.buildingGroup.remove(m); this.buildingMeshes.delete(key); }
     }
-    for(const [key, m] of this.treeMeshes){
-      if(!seenT.has(key)){ this.treeGroup.remove(m); this.treeMeshes.delete(key); }
-    }
+    this._syncTreeBatches(G);
 
     // 奇迹
     // G-09 修复：原实现只增不删——读档换世界 / 奇迹从 wonderList 移除后，
@@ -1587,8 +1638,8 @@ export class Renderer {
       const cloth = m.userData.clothMat || m.userData.torso?.material;
       if(cloth) cloth.color.set(FOLKCOL[G.era]);
     }
-    for(const [,m] of this.treeMeshes) this.treeGroup.remove(m);
-    this.treeMeshes.clear();
+    // P2-A：树批次材质含时代叶色，时代切换时整批重建（下一帧 syncWorld 自动重填）
+    this._clearTreeInst();
     this.terrainDirty = true;
   }
 

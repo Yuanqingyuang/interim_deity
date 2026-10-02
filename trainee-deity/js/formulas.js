@@ -44,7 +44,8 @@ export const LAYOUT = {
   CHUNK: 10,
   gap_min: 1,
   gap_farm: 0,
-  batch: { 1: 9, 2: 9, 3: 2, 4: 1 },
+  // P2-B（2026-10 决策：以代码为准）：原 batch={1:9,2:9,3:2,4:1} 为死值（全库零引用），已删除。
+  // 批次方阵不实施；工业 2 格配对由 AUTO.industryPerTick 承担，见 numeric-design §8 实现差异注。
   // 打分权重
   w1: 3.0, w2: 2.0, w3: 1.5, w4: 2.5, w5: 2.0,
 };

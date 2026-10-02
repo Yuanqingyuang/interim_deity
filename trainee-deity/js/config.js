@@ -13,6 +13,7 @@ export const WATER_LEVEL = 0.75;
 export const AUTOSAVE_SEC = 180;        // 自动存档间隔（秒）
 export const EXIT_SAVE_MIN_MS = 15000;  // 离场同步写档节流窗口（毫秒）
 export const MAX_BUILD_MESH = 420;      // 建筑网格视觉上限（超出后抽样代表格）
+export const MAX_TREE_MESH = 800;       // 区块内树视觉上限（超出后按步长抽样，配合 InstancedMesh 合批，P2-A）
 
 // ---- 无边界区块 ----
 export const CHUNK = 10;
