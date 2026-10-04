@@ -148,4 +148,31 @@ const sigs = [0,1,2,3,4].map(e => [...geoKeysOf(e, 1, 0)].sort().join('|'));
 const uniq = new Set(sigs);
 assert(uniq.size === 5, `五个时代的住房构件集合两两不同（${uniq.size}/5 种）`);
 
-console.log('渲染构建器冒烟冒烟测试 PASS');
+// ---- 7) 工业（zone 3）形体：E1 土窑 / E2-E3 作坊 / E4 锯齿厂房 / E5 反应堆 ----
+const f1 = geoKeysOf(0, 3, 0);
+assert(f1.has('kilnDome') && f1.has('kilnHole'), `E1 工业为土窑（${[...f1].join(',')}）`);
+const f2 = geoKeysOf(1, 3, 0);
+assert(f2.has('brickChim') && !f2.has('sawTooth'), `E2 工业为作坊（细烟道、无锯齿，${[...f2].join(',')}）`);
+const f3 = geoKeysOf(2, 3, 0);
+assert(f3.has('glowRing'), `E3 工业含水轮（复用 glowRing 几何，${[...f3].join(',')}）`);
+const f4 = geoKeysOf(3, 3, 0);
+assert(f4.has('saw') && f4.has('brickChim') && f4.has('shed'), `E4 工业为锯齿厂房+砖烟囱（${[...f4].join(',')}）`);
+const f5 = geoKeysOf(4, 3, 0);
+assert(f5.has('bodyCyl') && f5.has('glowRing') && !f5.has('saw'), `E5 工业为圆柱反应堆（${[...f5].join(',')}）`);
+const fSigs = [0,1,2,3,4].map(e => [...geoKeysOf(e, 3, 0)].sort().join('|'));
+assert(new Set(fSigs).size >= 4, `工业形体至少 4 种互不相同（${new Set(fSigs).size}/5）`);
+
+// ---- 8) 每类分区在每个时代都必须产出网格（防止分派遗漏导致"空地"）----
+for(let era=0; era<5; era++){
+  for(const zone of [1,2,3,4]){
+    for(let variant=0; variant<3; variant++){
+      const t = { zone, variant, _wx: 1, _wy: 1.2, _wz: 1, built: true, prog: 1 };
+      const grp = R.makeBuilding(t, era);
+      const n = grp.children.filter(o=>o.isMesh).length;
+      if(n === 0) throw new Error(`FAIL: era${era+1} zone${zone} varn${variant} 未产出任何网格`);
+    }
+  }
+}
+assert(true, '4 类分区 × 3 变体 × 5 时代 全部产出至少 1 个网格');
+
+console.log('渲染构建器冒烟测试 PASS');

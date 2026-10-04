@@ -244,7 +244,7 @@ export function churchStyleForEra(era){
   };
 }
 
-/** 工厂：时代金属/混凝土差分 */
+/** 工厂：时代金属/混凝土差分 + 形体方案（2026-10，见 时代建筑外观规划.md） */
 export function factoryStyleForEra(era){
   const e = Math.max(0, Math.min(4, era|0));
   const tints = [
@@ -255,7 +255,14 @@ export function factoryStyleForEra(era){
     { wall:0x4dd0e1, roof:0x006064, brick:0x37474f, glow:0x00e5ff },
   ];
   const tint = tints[e];
-  return { ...FACTORY_STYLE, wall: tint.wall, roof: tint.roof, brick: tint.brick, eraGlow: tint.glow || 0 };
+  // 形体：E1 土窑（半球窑体+烟孔，与作坊/厂房的方形轮廓完全不同）
+  //       E2 石砌作坊（方体+单坡+细烟道）  E3 水车作坊（方体+外置水轮）
+  //       E4/E5 锯齿厂房（现状造型，已是工业时代招牌剪影）
+  const forms = ['kiln', 'workshop', 'workshop', 'factory', 'reactor'];
+  return {
+    ...FACTORY_STYLE, wall: tint.wall, roof: tint.roof, brick: tint.brick,
+    eraGlow: tint.glow || 0, form: forms[e],
+  };
 }
 
 export const ZONES = {

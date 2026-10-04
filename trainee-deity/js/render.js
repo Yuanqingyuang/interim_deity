@@ -1081,9 +1081,166 @@ export class Renderer {
     return grp;
   }
 
-  // 工业区：厂房 — 低矮混凝土体 + 锯齿屋顶 + 砖烟囱 + 装卸口
+  // 工业区：按时代形体分派（2026-10，见 时代建筑外观规划.md）
+  //   E1 土窑 · E2/E3 作坊（单坡+细烟道/水轮） · E4/E5 锯齿厂房（既有造型，工业招牌剪影）
   _makeFactory(t, era){
     const F = factoryStyleForEra(era);
+    if(F.form === 'kiln')     return this._makeKiln(t, era, F);
+    if(F.form === 'workshop') return this._makeWorkshop(t, era, F);
+    if(F.form === 'reactor')  return this._makeReactor(t, era, F);
+    return this._makeSawFactory(t, era, F);
+  }
+
+  /** E1 蛮荒：土窑 —— 半球窑体 + 窑顶烟孔 + 柴堆，圆形剪影与作坊/厂房区分 */
+  _makeKiln(t, era, F){
+    const grp = new THREE.Group();
+    const varn = t.variant % 3;
+    const r = 0.34 + varn*0.03;
+    const earthMat = this._mat(F.brick);          // 夯土/砖色复用工厂色板
+    const stoneMat = this._mat(F.side);
+
+    const base = new THREE.Mesh(this._geo.padRound, stoneMat);
+    base.scale.set(r*2.6, 1, r*2.6);
+    base.position.y = 0.02; base.receiveShadow = true;
+    grp.add(base);
+
+    const dome = new THREE.Mesh(this._geo.kilnDome, earthMat);
+    dome.scale.set(r*2.3, r*1.9, r*2.3);
+    dome.position.y = 0.04;
+    dome.castShadow = true; dome.receiveShadow = true;
+    grp.add(dome);
+
+    // 窑顶烟孔（冒烟口）
+    const hole = new THREE.Mesh(this._geo.kilnHole, stoneMat);
+    hole.position.set(0, r*1.9 + 0.04, 0);
+    grp.add(hole);
+
+    // 窑口（正面拱口）
+    const mouth = new THREE.Mesh(this._geo.archDoor, this._mat(F.roof));
+    mouth.position.set(0, 0.12, r*1.06);
+    grp.add(mouth);
+
+    // 柴堆（两段横木，强化"蛮荒工业"语义）
+    for(let i=0;i<2;i++){
+      const log = new THREE.Mesh(this._geo.fence, this._mat(F.brick));
+      log.position.set(r*1.35, 0.06 + i*0.07, -r*0.5);
+      log.rotation.y = 0.35 + i*0.3;
+      grp.add(log);
+    }
+
+    grp.rotation.y = (hash2(t._wx|0, t._wz|0, t.variant) - 0.5) * 0.6;
+    grp.position.set(t._wx, 0, t._wz);
+    return grp;
+  }
+
+  /** E2/E3 作坊：方体 + 单坡顶 + 细烟道；E3 另加外置水轮（封建水力作坊） */
+  _makeWorkshop(t, era, F){
+    const grp = new THREE.Group();
+    const varn = t.variant % 3;
+    const bh = (0.48 + varn*0.05) * (1 + era*0.05);
+    const fw = 0.58, fl = 0.66;
+    const wallMat = this._mat(F.wall);
+    const sideMat = this._mat(F.side);
+    const roofMat = this._mat(F.roof);
+
+    const pad = new THREE.Mesh(this._geo.pad, sideMat);
+    pad.scale.set(fw*1.18, 1, fl*1.14);
+    pad.position.y = 0.02; pad.receiveShadow = true;
+    grp.add(pad);
+
+    const body = new THREE.Mesh(this._geo.houseBody, wallMat);
+    body.scale.set(fw, bh, fl);
+    body.position.y = bh/2;
+    body.castShadow = true; body.receiveShadow = true;
+    grp.add(body);
+
+    // 单坡顶：斜置薄板（比双坡/锯齿更"手工"）
+    const shed = new THREE.Mesh(this._geo.wingRoof, roofMat);
+    shed.scale.set(fw*1.12, 0.06, fl*1.18);
+    shed.position.set(0, bh + 0.05, 0);
+    shed.rotation.z = -0.16;
+    shed.castShadow = true;
+    grp.add(shed);
+
+    // 细烟道（比方厂房的砖烟囱细，体量小）
+    const chim = new THREE.Mesh(this._geo.brickChim, this._mat(F.brick));
+    chim.scale.set(0.8, bh*1.5 + 0.3, 0.8);
+    chim.position.set(fw*0.30, (bh*1.5 + 0.3)*0.5 + bh*0.4, -fl*0.24);
+    chim.castShadow = true;
+    grp.add(chim);
+
+    // 木门 + 窗
+    const door = new THREE.Mesh(this._geo.door, sideMat);
+    door.position.set(0, 0.15, fl*0.5 + 0.01);
+    door.scale.set(1.15, 1.0, 1);
+    grp.add(door);
+    const winMat = this._basicMat(F.window);
+    for(const wx of [-fw*0.30, fw*0.30]){
+      const w = new THREE.Mesh(this._geo.window, winMat);
+      w.position.set(wx, bh*0.62, fl*0.5 + 0.01);
+      grp.add(w);
+    }
+
+    // E3 水轮：外置圆盘（封建水力作坊特征）
+    if(era >= 2){
+      const wheel = new THREE.Mesh(this._geo.glowRing, this._mat(F.roof));
+      wheel.scale.set(1.7, 1, 1.7);
+      wheel.rotation.z = Math.PI/2;
+      wheel.position.set(-fw*0.72, bh*0.45, 0);
+      wheel.castShadow = true;
+      grp.add(wheel);
+    }
+
+    grp.rotation.y = (hash2(t._wx|0, t._wz|0, t.variant) - 0.5) * 0.10;
+    grp.position.set(t._wx, 0, t._wz);
+    return grp;
+  }
+
+  /** E5 星际：圆柱反应堆 + 发光环带 */
+  _makeReactor(t, era, F){
+    const grp = new THREE.Group();
+    const varn = t.variant % 3;
+    const rh = 0.72 + varn*0.08;
+    const wallMat = this._mat(F.wall);
+    const glowMat = this._basicMat(F.eraGlow || F.window);
+
+    const pad = new THREE.Mesh(this._geo.padRound, this._mat(F.side));
+    pad.scale.set(1.5, 1, 1.5);
+    pad.position.y = 0.02; pad.receiveShadow = true;
+    grp.add(pad);
+
+    // 主反应堆柱体（上窄下宽）
+    const core = new THREE.Mesh(this._geo.bodyCyl, wallMat);
+    core.scale.set(1.5, rh, 1.5);
+    core.position.y = rh/2;
+    core.castShadow = true; core.receiveShadow = true;
+    grp.add(core);
+
+    // 两道发光环带（时代的自发光特征）
+    for(let i=0;i<2;i++){
+      const ring = new THREE.Mesh(this._geo.glowRing, glowMat);
+      ring.scale.set(1.58, 1, 1.58);
+      ring.position.y = rh*(0.34 + i*0.38);
+      grp.add(ring);
+    }
+
+    // 顶盖 + 排气塔
+    const cap = new THREE.Mesh(this._geo.padRound, this._mat(F.roof));
+    cap.scale.set(1.3, 1, 1.3);
+    cap.position.y = rh;
+    grp.add(cap);
+    const stack = new THREE.Mesh(this._geo.brickChim, this._mat(F.roof));
+    stack.scale.set(0.7, 0.34, 0.7);
+    stack.position.y = rh + 0.17;
+    grp.add(stack);
+
+    grp.rotation.y = (hash2(t._wx|0, t._wz|0, t.variant) - 0.5) * 0.10;
+    grp.position.set(t._wx, 0, t._wz);
+    return grp;
+  }
+
+  /** E4 工业：锯齿屋顶厂房（原实现，保留为工业时代招牌造型） */
+  _makeSawFactory(t, era, F){
     const grp = new THREE.Group();
     const varn = t.variant % 3;
     const bh = (0.55 + varn*0.06) * (1 + era*0.06);
