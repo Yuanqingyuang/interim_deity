@@ -12,6 +12,7 @@ import {
 } from './config.js';
 import { cornerColor, heightAt, riverMask, sampleHeight } from './terrain.js';
 import { getTile, eachTile, chunkBounds, tileLive } from './state.js';
+import { buildQ } from './formulas.js';
 
 const WATER_Y = WATER_LEVEL;
 const MIN_H_SAFE = 0.22;
@@ -108,16 +109,13 @@ export class Renderer {
     this._keys = { w:false, a:false, s:false, d:false, q:false, e:false, shift:false };
     this._bindCameraKeys(canvas);
 
-    this.terrainMesh = null;
-    this.waterMesh = null;
-    this.hoverMesh = null;
-    this.buildingGroup = new THREE.Group(); this.scene.add(this.buildingGroup);
-    this.treeGroup = new THREE.Group(); this.scene.add(this.treeGroup);
-    this.npcGroup = new THREE.Group(); this.scene.add(this.npcGroup);
-    this.particleGroup = new THREE.Group(); this.scene.add(this.particleGroup);
-    this.wonderGroup = new THREE.Group(); this.scene.add(this.wonderGroup);
-    this.decoGroup = new THREE.Group(); this.scene.add(this.decoGroup);
-    this.terrainDirty = true;
+    // 场景挂载（容器与 terrainMesh/waterMesh/hoverMesh 已在 _initState 建好，这里只挂到 scene 上）
+    this.scene.add(this.buildingGroup);
+    this.scene.add(this.treeGroup);
+    this.scene.add(this.npcGroup);
+    this.scene.add(this.particleGroup);
+    this.scene.add(this.wonderGroup);
+    this.scene.add(this.decoGroup);
   }
 
   /**
@@ -134,6 +132,16 @@ export class Renderer {
     this.skyTex = null;
     this.buildingMeshes = new Map();
     this.wonderMeshes = new Map();
+    // 场景挂载组：纯容器（Object3D/Group 不需要 WebGL），放在这里使合批逻辑可被 Node 测试覆盖
+    this.buildingGroup = new THREE.Group();
+    this.treeGroup = new THREE.Group();
+    this.npcGroup = new THREE.Group();
+    this.particleGroup = new THREE.Group();
+    this.wonderGroup = new THREE.Group();
+    this.decoGroup = new THREE.Group();
+    this.terrainMesh = null;
+    this.waterMesh = null;
+    this.hoverMesh = null;
     // P2-A 植被合批：区块内树不再逐棵建 Group，而是按部件合入 5 个 InstancedMesh 批次
     this._treeCand = [];       // 每帧收集的候选树格（复用数组，避免逐帧分配）
     this._treeInst = null;     // {trunk,cone,mid,ico,bush} 批次缓存（时代切换时重建）
@@ -919,9 +927,56 @@ export class Renderer {
     else                               this._houseBox(grp, c, { bh, fp, varn, era, style, add, form });
 
     this._houseCommon(grp, c, { bh, fp, varn, era, style, add, form });
+    // V3 多体聚落：E3 起 1 地块代表多栋逻辑建筑（BUILD_Q），画面上渲染为「主楼 + 环绕副楼」，
+    // 使「1 格 = N 栋」在视觉上可信（否则玩家看到 1 栋房却被告知代表 20 栋）。
+    this._houseCluster(grp, c, { bh, fp, varn, era, style });
 
     grp.position.set(t._wx, 0, t._wz);
     return grp;
+  }
+
+  /**
+   * BUILD_Q 的多体聚落：在主楼周围补 0–3 个缩小副楼。
+   * 副楼与主楼共用几何/材质缓存（仅缩放不同），因此不新增合批槽位 —— 但会按副楼数量增加实例数，
+   * 容量按 (1+CLUSTER_MAX) × MAX_BUILD_MESH 预留，见 _ensureBldBatches。
+   * 位置取 ±0.30 的有限偏移（不超过地块内切一半），避免与邻格建筑视觉重叠。
+   */
+  _houseCluster(grp, c, { bh, fp, varn, era, style }){
+    const q = buildQ(era);
+    if(q <= 1) return;                                   // E1/E2：1 格 = 1 栋，不补副楼
+    // 副楼数量随 BUILD_Q 与变体变化（2–3 个）：BUILD_Q 越大，聚落越成片
+    const maxSat = Math.min(3, Math.max(2, Math.round(q / 8)));
+    const count = Math.min(maxSat, 2 + (varn % 2));
+    const off = fp * 0.30;
+    // 两点/三点布局：偏移量取 fp*0.30，配合副楼缩放后总外延 ≈0.41，不越地块一半（实测见测试）
+    const LAYOUTS = {
+      2: [[-off, -off], [off, off]],
+      3: [[0, -off], [-off, off], [off, off]],
+    };
+    const spots = LAYOUTS[count] || LAYOUTS[2];
+    const satMat = { wall: c.side, roof: c.roof };
+    for(let i=0; i<spots.length; i++){
+      const [sx, sz] = spots[i];
+      const sh = bh * (0.34 + (i % 2) * 0.10);
+      const sw = fp * (0.30 + (i % 3) * 0.04);
+      const sb = new THREE.Mesh(this._geo.houseBody, satMat.wall);
+      sb.scale.set(sw, sh, sw * 1.04);
+      sb.position.set(sx, sh/2, sz);
+      sb.castShadow = true; sb.receiveShadow = true;
+      grp.add(sb);
+      // 副楼顶：按时代取圆顶/坡顶/平顶，保持与主楼同一时代语汇
+      const rk = style.form?.roof === 'dome' ? 'domeSmall'
+               : (style.form?.roof === 'cone' ? 'coneRoof'
+               : (style.form?.roof === 'saw' ? 'wingRoof' : 'gableRoof'));
+      const rf = new THREE.Mesh(this._geo[rk] || this._geo.wingRoof, satMat.roof);
+      if(rk === 'domeSmall') rf.scale.set(sw*0.72, sw*0.62, sw*0.72);
+      else if(rk === 'coneRoof') rf.scale.set(sw*1.5, 0.75, sw*1.5);
+      else rf.scale.set(sw*1.25, 0.055, sw*1.35);
+      rf.position.set(sx, rk === 'wingRoof' ? sh + 0.03 : sh + (rk === 'coneRoof' ? 0.13 : 0.02), sz);
+      if(rk === 'gableRoof') rf.rotation.y = Math.PI/4;
+      rf.castShadow = true;
+      grp.add(rf);
+    }
   }
 
   /** 民宅配件：门/台阶/门楣/窗/窗台/烟囱 —— 与形体无关，三型共用 */

@@ -208,6 +208,90 @@ for(const zone of [1,2,3,4]){
     `zone${zone} 的五时代形体至少 4 种互不相同（${new Set(sigs).size}/5）`);
 }
 
+// ---- 12) V3 多体聚落：E3 起 1 地块代表多栋（BUILD_Q），画面渲染「主楼 + 环绕副楼」----
+{
+  const { buildQ } = await import('../js/formulas.js');
+  // 直接检测副楼：主楼 houseBody 的 x 缩放 = fp*0.72 = 0.504，偏屋（wing）0.294，
+  // 副楼 0.210–0.238 —— 故用「x 缩放 < 0.25」把副楼与主楼/偏屋区分开。
+  // 不用网格总数当代理指标：E2 主屋构件本就多（17 个），无法区分「构件多」与「有副楼」。
+  const satCount = (era, variant = 0)=>{
+    const grp = R.makeBuilding({ zone:1, variant, _wx:0, _wy:1.2, _wz:0, built:true, prog:1 }, era);
+    return grp.children.filter(o =>
+      o.isMesh && o.geometry === R._geo.houseBody && o.scale.x < 0.25
+    ).length;
+  };
+  for(let era=0; era<5; era++){
+    const n = satCount(era);
+    if(buildQ(era) <= 1){
+      assert(n === 0, `E${era+1}（BUILD_Q=${buildQ(era)}）不生成副楼（实测 ${n} 个）`);
+    } else {
+      assert(n >= 2, `E${era+1}（BUILD_Q=${buildQ(era)}）生成 ${n} 个副楼（≥2）`);
+    }
+  }
+  // 副楼随 varn 变化（确定性布局，不是随机）
+  const v0 = satCount(4, 0), v2 = satCount(4, 2);
+  assert(v0 >= 2 && v2 >= 2, `E5 各变体均有副楼（varn0=${v0}, varn2=${v2}）`);
+
+  // 副楼不得超出地块：任何网格的几何外延（含位移）应在 ±0.52 内，否则与邻格建筑视觉重叠
+  const grp = R.makeBuilding({ zone:1, variant:2, _wx:0, _wy:1.2, _wz:0, built:true, prog:1 }, 4);
+  let maxExtent = 0;
+  for(const m of grp.children){
+    if(!m.isMesh) continue;
+    const g = m.geometry;
+    g.computeBoundingBox?.();
+    const bb = g.boundingBox;
+    if(!bb) continue;
+    const ex = Math.max(Math.abs(bb.max.x * m.scale.x), Math.abs(bb.min.x * m.scale.x)) + Math.abs(m.position.x);
+    const ez = Math.max(Math.abs(bb.max.z * m.scale.z), Math.abs(bb.min.z * m.scale.z)) + Math.abs(m.position.z);
+    maxExtent = Math.max(maxExtent, ex, ez);
+  }
+  assert(maxExtent <= 0.52, `E5 聚落外延 ${maxExtent.toFixed(3)} ≤ 0.52（不越地块一半，避免与邻格重叠）`);
+}
+
+// ---- 13) 合批回归：槽位数上限 + 几何缓存不被逐栋创建 ----
+// 2026-10 形体分化后每代新增若干几何，槽位数会上升；P3 的合批把 DrawCall 与「活跃槽位数」
+// 绑定，因此必须给槽位数设红线，防止后续再添形体时悄悄拖垮 DrawCall。
+{
+  const MAX_SLOTS = 60;      // 现状实测见下方输出；红线留出余量
+  const perEra = [];
+  for(let era=0; era<5; era++){
+    R._clearBldInst();
+    const inst = R._ensureBldBatches(era);
+    assert(Array.isArray(inst) && inst.length > 0, `E${era+1} 合批建立 ${inst.length} 个槽位`);
+    assert(inst.length <= MAX_SLOTS, `E${era+1} 槽位数 ${inst.length} ≤ 红线 ${MAX_SLOTS}`);
+    // 每个槽位容量 = 单栋该槽位最大部件数 × MAX_BUILD_MESH，必须为正整数且 ≥ MAX_BUILD_MESH
+    for(const s of inst){
+      if(!Number.isInteger(s.cap) || s.cap < 420){
+        throw new Error(`FAIL: E${era+1} 槽位容量异常 cap=${s.cap}`);
+      }
+    }
+    perEra.push({ era: era+1, slots: inst.length });
+  }
+  console.log('');
+  console.log('合批槽位数（每时代整批重建）：');
+  for(const p of perEra) console.log(`  E${p.era}  ${String(p.slots).padStart(3)} 个槽位`);
+  console.log('');
+  R._clearBldInst();
+
+  // 几何缓存不得被构建器污染：连续构建不应新增 _geo 键
+  const before = Object.keys(R._geo).length;
+  for(let era=0; era<5; era++)
+    for(const zone of [1,2,3,4])
+      for(let v=0; v<3; v++)
+        R.makeBuilding({ zone, variant:v, _wx:0, _wy:1.2, _wz:0, built:true, prog:1 }, era);
+  const after = Object.keys(R._geo).length;
+  assert(after === before, `构建 60 组后 _geo 键数不变（${before} → ${after}）—— 几何未被逐栋创建`);
+
+  // 材质缓存也应有界：同一状态重复构建不应持续增长
+  const matBefore = R._matCache.size;
+  for(let k=0; k<3; k++)
+    for(let era=0; era<5; era++)
+      for(const zone of [1,2,3,4])
+        R.makeBuilding({ zone, variant:k%3, _wx:0, _wy:1.2, _wz:0, built:true, prog:1 }, era);
+  const matAfter = R._matCache.size;
+  assert(matAfter === matBefore, `重复构建后材质缓存不再增长（${matBefore} → ${matAfter}）`);
+}
+
 // ---- 11) 每类分区在每个时代都必须产出网格（防止分派遗漏导致"空地"）----
 for(let era=0; era<5; era++){
   for(const zone of [1,2,3,4]){
