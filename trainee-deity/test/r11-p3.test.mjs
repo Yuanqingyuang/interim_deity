@@ -10,7 +10,7 @@ function assert(cond, msg){
 }
 
 // formulas
-assert(T[0]===200 && T[4]===100000, 'T array');
+assert(T[0]===200 && T[4]===60000, 'T array');
 assert(buildingLow(0, 1) === Math.ceil(200*0.25), 'house low E1');
 assert(buildingHigh(0, 1) === Math.ceil(200*0.25*1.25), 'house high E1');
 assert(popCap(0, 10, 0, 0) === 40, 'popCap housing E1');

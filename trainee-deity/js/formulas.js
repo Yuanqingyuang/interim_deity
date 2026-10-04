@@ -3,7 +3,12 @@
 
 import { FAITH_ERA_DAMP } from './config.js';
 
-export const T = [200, 2000, 8000, 20000, 100000];
+// E5 目标 100000 → 60000（2026-10，配合 BUILD_Q 引入）：
+// 岛屿可建造格实测 4,979~5,881/种子、8 邻域空置后建筑格硬上限 ≈1,350 个；
+// E5 按 BUILD_Q=20 的关键路径 = 750 房格 + 375 工格 + 25 里程碑 + 60 农田 ≈ 1,210 格，
+// 10 万目标需 1,500 房格 + 750 工格 = 2,250 格（超上限），6 万目标才留出余量。
+// 逻辑口径仍是「星际时代 6 万子民」，叙事跨度不受影响（E1 的 200 → E5 的 60,000，300 倍）。
+export const T = [200, 2000, 8000, 20000, 60000];
 
 export const NUM = {
   C_HOUSE: 4,
@@ -28,6 +33,15 @@ export const NUM = {
   // 代理比 q(E) = T(E)÷R(E)：1 个渲染村民代表 q 个实际村民（§7.2，p(E) = 1/q(E)）。
   // E3 取 53.33（表内 53 为舍入显示），保证 T(E) 下输出恰为 30/80/150/250/400。
   RENDER_Q: [6.7, 25, 53.33, 80, 250],
+  // 建筑代理比 BUILD_Q(E)：1 个地块代表几栋逻辑建筑（2026-10 新增，见 numeric-design §9）。
+  // 与村民代理比 RENDER_Q 同构：村民早已「一人代表多人」，建筑此前仍是 1 格 = 1 栋，
+  // 而 8 邻域空置规则把非农田密度压到 ≤25% —— 实测岛屿可建造格仅 4,979~5,881/种子，
+  // 建筑格硬上限 ≈1,350 个，而 E5 原需求（25,000 房 + 7,500 工）超上限 25 倍。
+  // 故按时代放大每格承载：逻辑建筑数 buildingLow/High 保持不变，地块数 = 逻辑数 ÷ BUILD_Q。
+  // 取值经 test/r16-build-q.test.mjs 校准：各时代**关键路径**地块数必须 ≤ 预算 1250。
+  // E3 取 3（非 2）：E3 人口 8000 → 2000 逻辑房，若只 ÷2 需 1000 房格，加门槛工业与农田
+  // 后达 1380 格、超预算 —— 该超限由回归测试实测抓出。
+  BUILD_Q: [1, 1, 3, 6, 20],
   // 各建筑造价权重（§3⑤/§6）：产能需求 = c_build(E) × cost(zone)。
   // 按刚需配比 r_b 加权后均值恰为 1.0（0.25×0.6+0.20×0.8+0.15×1.6+0.05×2.0 = 0.65 = Σr_b），
   // 不改变 §4.3 整体建造速度曲线，只重新分配四类建筑间的经济压力。
@@ -58,6 +72,27 @@ export function buildingHigh(E, zone){
   return Math.ceil(T[E] * NUM.R_B[zone] * NUM.K);
 }
 
+/** E 下标夹取到 0..4（与 RENDER_Q / BUILD_Q 同长） */
+function eraClamp(E){ return Math.max(0, Math.min(NUM.BUILD_Q.length - 1, E|0)); }
+
+/**
+ * 建筑代理比 BUILD_Q(E)：1 个地块代表的逻辑建筑数。
+ * 调用点若持有「地块数」，乘此值即得「逻辑数」；持有逻辑数则除以它即得地块数。
+ */
+export function buildQ(E){ return NUM.BUILD_Q[eraClamp(E)]; }
+
+/** 逻辑建筑数 → 地块数（放置目标口径）。autoBuild 的 need[] 与地块硬上限都用它。 */
+export function toTiles(logicalCount, E){
+  return Math.ceil(logicalCount / buildQ(E));
+}
+
+/**
+ * 建筑上限的地块口径：low = 刚需放置目标，high = 时代容量（×K）。
+ * 逻辑口径（用于数值核算表、里程碑、文档）仍是 buildingLow/buildingHigh，两者不可混用。
+ */
+export function buildingLowTiles(E, zone){ return toTiles(buildingLow(E, zone), E); }
+export function buildingHighTiles(E, zone){ return toTiles(buildingHigh(E, zone), E); }
+
 /**
  * 奇迹「人口容量」乘区：金字塔 +20%、摩天塔 +50%（config.js WONDERS[1]/[3] 的 bonus 文案）。
  * 单一来源 —— state.housingCap（autoBuild 压力判断）与 tick 的人口上限都必须经此计算，
@@ -83,17 +118,25 @@ export function popCap(E, houses, farms, industries, wonders){
   return cap * wonderPopMult(wonders);
 }
 
+/**
+ * 粮/产/信仰与人口上限的入参口径（2026-10 BUILD_Q 引入后必须区分）：
+ *   · **逻辑数** —— farms/churches/industries 传「地块数 × buildQ(E)」，用于产出与人口上限；
+ *   · **地块数** —— 仅用于放置目标（need[]）与地块硬上限。
+ * 传错口径会让后期产出少算 BUILD_Q 倍（E5 差 20 倍），故调用点注释需标明。
+ */
 export function foodPerSec(farms){ return farms * NUM.C_FARM; }
 export function foodNeed(N){ return N * NUM.R_FOOD; }
 /**
  * 信仰/秒 = (教堂 × K_CHURCH + 人口 × K_FAITH_POP) × 时代阻尼
  * 人口项必须按时代阻尼：否则人口每时代涨 10~1000 倍会直接把信仰产出带爆
  * （各时代满规模产出见 config.js FAITH_ERA_BASE）
+ * churches 为逻辑数。
  */
 export function faithPerSec(churches, N, E=0){
   const i = Math.max(0, Math.min(4, E|0));
   return (churches * NUM.K_CHURCH + N * NUM.K_FAITH_POP) * FAITH_ERA_DAMP[i];
 }
+/** industries 为逻辑数（地块数 × buildQ(E)） */
 export function industryPerSec(industries){ return industries * NUM.K_IND; }
 
 /**

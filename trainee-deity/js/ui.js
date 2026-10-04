@@ -405,9 +405,12 @@ export class UI {
     const farms = (c && c.valid) ? (c[2]||0) : 0;
     const inds  = (c && c.valid) ? (c[3]||0) : 0;
     const E = F.eraIndex(G);
-    const foodOut = F.foodPerSec(farms);
+    // 逻辑口径：1 地块 = buildQ(E) 栋（numeric-design §9）。HUD 的粮/产读数与人口上限同源，
+    // 否则 E5 会显示「375 座工业 → 375/s」，而实际产能是 7,500/s，玩家看到的数与判定用的数不一致。
+    const qB = F.buildQ(E);
+    const foodOut = F.foodPerSec(farms * qB);
     const foodNeed = F.foodNeed(G.pop);
-    const indOut = F.industryPerSec(inds);
+    const indOut = F.industryPerSec(inds * qB);
     const indForEra = F.buildingLow(E, 3);
     const indForPop = Math.max(1, Math.ceil(G.pop * F.NUM.R_INDPOP / F.NUM.K_IND));
     const indNeed = F.industryPerSec(Math.max(indForEra, indForPop));

@@ -29,7 +29,11 @@ export const ERAS = [
   { name:'城邦时代', roman:'II', popTarget:2000,    starCost:3, popGoal:2000 },
   { name:'封建时代', roman:'III',popTarget:8000,    starCost:3, popGoal:8000 },
   { name:'工业时代', roman:'IV', popTarget:20000,   starCost:3, popGoal:20000 },
-  { name:'星际时代', roman:'V',  popTarget:100000,  starCost:3, popGoal:100000 },
+  // E5 目标 100000 → 60000（2026-10，配合 formulas.NUM.BUILD_Q 建筑代理比引入）：
+  // 岛屿可建造格实测 4,979~5,881/种子 + 8 邻域空置 → 建筑格硬上限 ≈1,350 个，
+  // 10 万目标需 2,250 个建筑格（超上限）；6 万目标的关键路径 ≈1,210 格，留出余量。
+  // 叙事跨度不受影响：E1 的 200 → E5 的 60,000（300 倍），且逻辑人口仍是「6 万子民」。
+  { name:'星际时代', roman:'V',  popTarget:60000,   starCost:3, popGoal:60000 },
 ];
 
 // R5：星星仅由里程碑触发（每时代 3 个，一次性）。禁止纯 faithRate 时间出星。

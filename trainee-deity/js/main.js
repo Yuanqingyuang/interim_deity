@@ -583,8 +583,13 @@ function tick(dt){
   // R8 产出口径：粮/产/信仰按「已建成」计（与 UI 一致）；住房亦按已建成
   const zc = G._zoneCache || {1:0,2:0,3:0,4:0};
   const bc = G._builtCache || {1:0,2:0,3:0,4:0};
+  // 地块数（放置口径）
   const farms = bc[2]||0, inds = bc[3]||0, churches = bc[4]||0;
   const houses = bc[1]||0;
+  // 逻辑建筑数（产出与人口上限口径）：1 地块 = buildQ(E) 栋，见 numeric-design §9 BUILD_Q。
+  // 产出、人口上限、奇迹「人口容量」乘区都必须用这一组；放置目标（need[]）用上面那组地块数。
+  const qB = F.buildQ(E);
+  const farmsL = farms * qB, indsL = inds * qB, churchesL = churches * qB;
 
   G.autoAcc += dt;
   if(G.autoAcc >= AUTO.interval){
@@ -667,7 +672,7 @@ function tick(dt){
   if(wonderChanged) R.syncWorld(G);
 
   const nightBonus = (G.dayTime < 0.22 || G.dayTime > 0.78) ? 1.15 : 1.0;
-  G.faithRate = F.faithPerSec(churches, G.pop, G.era) * faithMult(G) * nightBonus;
+  G.faithRate = F.faithPerSec(churchesL, G.pop, G.era) * faithMult(G) * nightBonus;
   const faithGain = G.faithRate * dt;
   G.faith += faithGain; G.totalFaith += faithGain;
   // R4：信仰禁止为负
@@ -681,8 +686,9 @@ function tick(dt){
 
   // 奇迹「人口容量+20%/+50%」必须作用于实际增长上限：不能只进 autoBuild 压力判断（housingCap），
   // 否则 WONDERS 的 bonus 文案与顶部/进阶条承诺都不兑现（2026-10 修复的回归）。
-  const cap = F.popCap(E, houses, farms, inds, G.wonders);
-  let nextPop = F.growPop(G.pop, cap, E, farms, dt);
+  // 逻辑口径：popCap 的三项输入都是「逻辑建筑数」，故传 ×buildQ(E) 后的值。
+  const cap = F.popCap(E, houses * qB, farmsL, indsL, G.wonders);
+  let nextPop = F.growPop(G.pop, cap, E, farmsL, dt);
   if(G.boostGrow>0) nextPop = Math.min(cap, G.pop + (nextPop-G.pop)*2 + 0.6*dt);
   G.pop = Math.max(1, nextPop);
 
@@ -698,7 +704,10 @@ function checkStarMilestones(E, farms, inds, churches, houses){
   while(G.starMilestones.length < 5) G.starMilestones.push([false,false,false]);
   const flags = G.starMilestones[E] || (G.starMilestones[E] = [false,false,false]);
   const list = MILESTONES[E] || [];
-  const ctx = { farms, inds, churches, houses };
+  // 里程碑阈值是逻辑口径（config.js 的 c.farms/c.inds 如「农田≥10」「工业≥200」），
+  // 而入参是地块数，故 × buildQ(E) 后再判定 —— 与 tick 产出口径一致。
+  const qm = F.buildQ(E);
+  const ctx = { farms: farms*qm, inds: inds*qm, churches: churches*qm, houses: houses*qm };
   for(let i=0;i<list.length;i++){
     if(flags[i]) continue;
     if(list[i].check(G, ctx)){
@@ -715,7 +724,9 @@ export function milestoneSummary(G, farms, inds, churches){
   const E = F.eraIndex(G);
   const list = MILESTONES[E] || [];
   const flags = G.starMilestones?.[E] || [];
-  const ctx = { farms, inds, churches, houses: 0 };
+  // 与 checkStarMilestones 同口径：入参为地块数，判定前 × buildQ(E)
+  const qm = F.buildQ(E);
+  const ctx = { farms: farms*qm, inds: inds*qm, churches: churches*qm, houses: 0 };
   return list.map((m,i)=>{
     const done = !!flags[i];
     const ok = done || m.check(G, ctx);
@@ -736,22 +747,24 @@ function autoBuild(){
   const zcA = G._zoneCache || {1:0,2:0,3:0,4:0};
   const cnt = {1: zcA[1]||0, 2: zcA[2]||0, 3: zcA[3]||0, 4: zcA[4]||0 };
 
-  // 公式目标（low = 刚需）
+  // 公式目标（low = 刚需）；放置目标用**地块口径** buildingLowTiles = 逻辑数 ÷ buildQ(E)，
+  // 否则 E5 会试图铺 25,000 格住房（岛屿物理上限仅约 1,350 格建筑）→ 永久刷不满。
   const need = {};
   for(const z of [1,2,3,4]){
-    const lo = F.buildingLow(E, z);
-    const hi = F.buildingHigh(E, z);
+    const lo = F.buildingLowTiles(E, z);
+    const hi = F.buildingHighTiles(E, z);
     // S-04 修复：原 `cnt[z] + 2` 形成棘轮（need 恒 > cnt），farmShort/indShort/churchShort
     // 恒真 → autoBuild 无条件刷到 hi 水位。达标（cnt ≥ lo）后 need = cnt，缺口判定归零。
     need[z] = cnt[z] < lo ? lo : Math.min(hi, cnt[z]);
   }
 
-  // R-review：供需与 tick 一致，按「已建成」计
+  // R-review：供需与 tick 一致，按「已建成」计；产出用**逻辑口径**（地块 × buildQ(E)）
   const bcA = G._builtCache || {1:0,2:0,3:0,4:0};
+  const qBA = F.buildQ(E);
   const farmsBuilt = bcA[2]||0, indsBuilt = bcA[3]||0;
-  const foodOut = F.foodPerSec(farmsBuilt);
+  const foodOut = F.foodPerSec(farmsBuilt * qBA);
   const foodNeed = F.foodNeed(G.pop);
-  const indOut = F.industryPerSec(indsBuilt);
+  const indOut = F.industryPerSec(indsBuilt * qBA);
   // #25 性能：待建 = 划定 − 建成（与 tick 的 zSum−bSum 同口径），不再全图扫
   // §3⑤ 需求与 tick 一致按 BUILD_COST 加权（否则 autoBuild 门控与实际建造速度脱节）
   let pendingW = 0;
@@ -920,7 +933,8 @@ function eraReady(){
   if(G.stars < ERAS[G.era].starCost) return false;
   ensureBuiltCache();
   const indN = (G._builtCache && G._builtCache[3]) || 0;
-  return F.industryPerSec(indN) >= F.gateOf(G.era);
+  // 门槛是逻辑口径（gateOf = 0.5 × 逻辑刚需工业产能），故地块数须 × buildQ(E) 后再比
+  return F.industryPerSec(indN * F.buildQ(G.era)) >= F.gateOf(G.era);
 }
 function advanceEra(){
   if(!eraReady()){ toast('进阶条件未满足'); return; }
@@ -1135,7 +1149,8 @@ function updateUI(){
   const starOk = G.stars >= ERAS[G.era].starCost;
   const indN = G._builtCache?.valid ? (G._builtCache[3]||0) : 0;
   const gate = F.gateOf(E);
-  const indOut = F.industryPerSec(indN);
+  // 逻辑口径：地块数 × buildQ(E)，与 eraReady 判定同源（否则进阶条显示"未达标"却已满足）
+  const indOut = F.industryPerSec(indN * F.buildQ(E));
   const gateOk = indOut >= gate;
   const wonder = G.era===0 ? '（进阶无需奇迹）' : (wonderOk?'奇迹✓':'奇迹✗');
   // 「门槛」与顶栏使用同一数值（GATE(E) = 0.5 × 刚需工业产能），同屏口径一致
