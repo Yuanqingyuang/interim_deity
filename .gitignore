@@ -1,0 +1,43 @@
+# ---- 测试与调试产物（原先被误当成源码跟踪或散落工作区）----
+test-output/
+.pwtest/node_modules/
+.server.pid
+
+# ---- 依赖与构建 ----
+node_modules/
+dist/
+build/
+*.tsbuildinfo
+.cache/
+
+# ---- 编辑器 / 系统 ----
+.vscode/
+.idea/
+*.swp
+*~
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# ---- 日志与临时文件 ----
+*.log
+npm-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+*.tmp
+tmp/
+# 备份/补丁残留：一次误把 render.js.bak 提交进仓库后补上（改文件前的备份务必落在工作区外，
+# 或至少在此被忽略，避免把整份源码副本写进历史）
+*.bak
+*.bak[0-9]
+*.orig
+*.rej
+*.old
+*.save
+*.patch
+*.diff
+
+# ---- 本地环境（可能含密钥，严禁入库）----
+.env
+.env.*
+!.env.example
