@@ -650,11 +650,16 @@ export class Renderer {
     g.computeVertexNormals();
     g.computeBoundingSphere();
 
-    // 旷野装饰：低频重建（时代切换/初始化），避免刷地形时卡顿
-    if(!this._wildBuilt || this._wildEra !== era){
+    // 旷野装饰：低频重建（时代切换 / 初始化 / **世界范围扩张**），避免刷地形时卡顿。
+    // 2026-10 修复：原条件只看「首次」与「换时代」，于是地图扩张后新生成的外圈
+    // 永远没有植被（装饰只覆盖首次建地形时的范围）。现把世界范围纳入条件：
+    // 范围变化即整批重建（stride=3 的粗采样，成本为 O(范围/9)，属低频事件）。
+    const wildMeta = `${ox},${oy},${GW},${GH}`;
+    if(!this._wildBuilt || this._wildEra !== era || this._wildMeta !== wildMeta){
       this._buildWildDeco(G, ox, oy, GW, GH, seed, era);
       this._wildBuilt = true;
       this._wildEra = era;
+      this._wildMeta = wildMeta;
     }
   }
 
@@ -1908,6 +1913,9 @@ export class Renderer {
     for(const [key, s] of slots){
       const mesh = new THREE.InstancedMesh(s.geo, s.mat, s.perBld * MAX_BUILD_MESH);
       mesh.count = 0;
+      // 建筑批次聚集在城区内，包围球紧凑，故可恢复视锥剔除（此前统一 frustumCulled=false，
+      // 使主 pass 与阴影 pass 无条件全量提交）。包围球在每次写入实例后由 _syncBuildBatches 更新。
+      mesh.frustumCulled = true;
       mesh.castShadow = s.cast;
       mesh.receiveShadow = s.recv;
       mesh.frustumCulled = false;      // 实例散布全图，单件几何包围球不再适用
@@ -1968,6 +1976,9 @@ export class Renderer {
     for(const s of inst){
       s.mesh.count = s.n;
       s.mesh.instanceMatrix.needsUpdate = true;
+      // 更新批次包围球：建筑批次已恢复视锥剔除，若不算包围球就会沿用「空批次」时的球体，
+      // 导致整批被误剔除（画面成片建筑消失）。故每次写入实例后重算。
+      if(s.mesh.frustumCulled !== false) s.mesh.computeBoundingSphere?.();
     }
   }
 
@@ -2495,17 +2506,34 @@ export class Renderer {
     this._raycaster.setFromCamera(this._ndc, this.camera);
     const toTile = (v)=> Math.floor(v / TILE + 0.5);
 
+    // 按**射线**记忆化（2026-10 优化）：
+    // terrainMesh 是全图单网格，1089 区块时约 26.8 万三角形，而 handleMove 每次
+    // pointermove 都会调用本函数 → 未节流时拖动鼠标就是每像素一次全网格 raycast。
+    // 缓存键取射线原点+方向：同一格内移动时射线仍有极小变化，故再比对「解出的格号」——
+    // 格号相同即复用。相机移动会改变射线 → 自动失效，无需额外的失效逻辑。
+    // 用浮点等值比较是安全的：相机未动时 setFromCamera 对同一 NDC 产出位完全相同的射线。
+    const ro = this._raycaster.ray.origin, rd = this._raycaster.ray.direction;
+    const cache = this._pickCache;
+    if(cache){
+      const sameRay = cache.ox === ro.x && cache.oy === ro.y && cache.oz === ro.z
+                   && cache.dx === rd.x && cache.dy === rd.y && cache.dz === rd.z;
+      if(sameRay) return cache.cell ? cache.cell.slice() : null;
+    }
+    const ox = ro.x, oy = ro.y, oz = ro.z, dx = rd.x, dy = rd.y, dz = rd.z;
+
+    let cell = null;
     if(this.terrainMesh && this.terrainMesh.geometry){
       const hits = this._raycaster.intersectObject(this.terrainMesh, false);
       if(hits.length > 0){
         const p = hits[0].point;
-        return [toTile(p.x), toTile(p.z)];
+        cell = [toTile(p.x), toTile(p.z)];
       }
     }
-    if(this._raycaster.ray.intersectPlane(this._plane, this._hit)){
-      return [toTile(this._hit.x), toTile(this._hit.z)];
+    if(!cell && this._raycaster.ray.intersectPlane(this._plane, this._hit)){
+      cell = [toTile(this._hit.x), toTile(this._hit.z)];
     }
-    return null;
+    this._pickCache = { ox, oy, oz, dx, dy, dz, cell };
+    return cell ? cell.slice() : null;
   }
 
   applyEraVisuals(G){
