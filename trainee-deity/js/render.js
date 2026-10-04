@@ -634,7 +634,10 @@ export class Renderer {
     if(!this._wildInst) return;
     for(const m of this._wildInst){
       this.decoGroup.remove(m.mesh);
-      // 几何来自 _geo 缓存，不要 dispose
+      // 几何来自 _geo 共享缓存，不可 dispose（会连带销毁仍在复用的几何）；
+      // 但 InstancedMesh.dispose() 释放的是**实例缓冲**（instanceMatrix）——
+      // 它是每次重建新建的 GPU 资源，必须释放，否则每次重建泄漏一份。
+      m.mesh.dispose();
     }
     this._wildInst = null;
   }
@@ -718,7 +721,18 @@ export class Renderer {
     // 世界扩张时重建水面几何
     if(this.waterMesh && this._waterSize && size > this._waterSize * 1.12){
       this.scene.remove(this.waterMesh);
+      // 水面几何是本函数内新建的（不入 _geo 缓存），随网格一起释放
       this.waterMesh.geometry?.dispose();
+      // 以下三项每次重建都会新建，之前未释放 —— 每次「世界扩张 >12%」泄漏
+      // 1 张贴图（_waveTex）+ 1 个标准材质 + glow 的 clone 几何与 Basic 材质
+      const oldGlow = this.waterGlow;
+      if(oldGlow){
+        oldGlow.geometry?.dispose();
+        oldGlow.material?.dispose();
+      }
+      this.waterMesh.material?.dispose();
+      this._waveTex?.dispose();
+      this._waveTex = null;
       this.waterMesh = null;
       this.waterGlow = null;
     }
@@ -2411,6 +2425,10 @@ export class Renderer {
     this._clearTreeInst();
     // P3-A：建筑槽位批次的几何/材质同样按时代取色，切换时整批重建
     this._clearBldInst();
+    // _matCache 此前只增不减：每换一次时代都会为新时代配色建一批材质，
+    // 五代跑满后旧时代材质永久驻留。此处回收「已无任何网格引用」的材质；
+    // 仍被 terrain/water 等引用的材质会被保留（purgeMaterials(false) 只删未引用项）。
+    this.purgeMaterials(false);
     this.terrainDirty = true;
   }
 
@@ -2545,7 +2563,75 @@ export class Renderer {
     const cx = n ? sx/n : 0, cy = n ? sy/n : 0;
     this.panCameraTo(cx, cy, 48, 1.25);
   }
+
+  /**
+   * 释放本渲染器持有的全部 GPU 资源（2026-10 新增）。
+   * 此前类完全没有 dispose，导致任何「重建 Renderer」的路径（换世界不刷新页面、
+   * 单页应用内重启、测试反复构造）都会重复申请几何/材质/贴图并重复注册事件监听。
+   * _geo 与 _matCache 是**本类独占**的共享池（不同于 _geo 里被多处引用的几何本身），
+   * 因此可以整池释放；但要在释放前先清掉引用它们的批次网格。
+   */
+  dispose(){
+    // 1) 批次与实例缓冲（InstancedMesh.dispose 释放 instanceMatrix）
+    this._clearTreeInst();
+    this._clearBldInst();
+    this._clearWildInst();
+    if(this._npcInst){
+      for(const m of Object.values(this._npcInst.b || {})){ this._npcGroupRemove(m); m.dispose(); }
+      this._npcInst = null;
+    }
+    // 2) 场景中所有网格：几何若是本类 _geo 池内的，交由第 4 步统一释放；材质同理
+    const geoPool = new Set(Object.values(this._geo || {}));
+    const matPool = new Set((this._matCache || new Map()).values());
+    this.scene.traverse((o)=>{
+      if(!o.isMesh && !o.isInstancedMesh) return;
+      if(o.geometry && !geoPool.has(o.geometry)) o.geometry.dispose();
+      const mats = Array.isArray(o.material) ? o.material : [o.material];
+      for(const mt of mats) if(mt && !matPool.has(mt)) mt.dispose();
+    });
+    // 3) 本类独占的贴图与画布
+    this._waveTex?.dispose(); this._waveTex = null;
+    this.skyTex?.dispose();   this.skyTex = null;
+    this._skyCanvas = null;
+    // 4) 共享池整池释放
+    for(const g of geoPool) g.dispose();
+    this._geo = {};
+    this.purgeMaterials(true);
+    // 5) 渲染器本体与事件
+    this._unbindCameraKeys?.();
+    this.controls?.dispose?.();
+    this.renderer?.dispose?.();
+    this.buildingMeshes.clear();
+    this.wonderMeshes.clear();
+  }
+
+  /** 移除村民批次里的一个网格（dispose 时用，避免直接访问私有分组） */
+  _npcGroupRemove(m){ if(m) this.npcGroup.remove(m); }
+
+  /**
+   * 释放材质缓存（2026-10 新增）。
+   * _matCache 此前只增不减：每换一次时代都会为新的时代配色建一批材质，
+   * 五代跑满后旧时代材质永久驻留（数百个），且没有任何回收入口。
+   * all=false 时只释放「当前未被任何网格引用」的材质。
+   */
+  purgeMaterials(all = false){
+    if(!this._matCache) return 0;
+    let used = null;
+    if(!all){
+      used = new Set();
+      this.scene.traverse((o)=>{
+        if(!o.material) return;
+        for(const mt of (Array.isArray(o.material) ? o.material : [o.material])) if(mt) used.add(mt);
+      });
+    }
+    let n = 0;
+    for(const [k, m] of this._matCache){
+      if(all || !used.has(m)){ m.dispose?.(); this._matCache.delete(k); n++; }
+    }
+    return n;
+  }
 }
+
 
 export function cornerHeightAt(G, x, y){
   const t = getTile(G, x, y);

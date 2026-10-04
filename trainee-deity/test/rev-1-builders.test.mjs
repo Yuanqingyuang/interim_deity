@@ -292,6 +292,53 @@ for(const zone of [1,2,3,4]){
   assert(matAfter === matBefore, `重复构建后材质缓存不再增长（${matBefore} → ${matAfter}）`);
 }
 
+// ---- 14) 资源释放：dispose() 必须把本类独占的 GPU 资源计数归零 ----
+// 背景：类此前完全没有 dispose()，_matCache 也只增不减 —— 任何「重建 Renderer」的路径
+// （换世界不刷新页面、测试反复构造）都会重复申请资源并重复注册监听。本项锁死释放行为。
+{
+  const R2 = Object.create(Renderer.prototype);
+  R2._initState(makeCanvasStub());
+  R2.scene = new (await import('three')).Scene();
+  R2.scene.add(R2.buildingGroup, R2.treeGroup, R2.npcGroup, R2.particleGroup, R2.wonderGroup, R2.decoGroup);
+
+  // 造点负载：建筑构建 + 合批 + 野外实例
+  for(let era=0; era<5; era++)
+    for(const zone of [1,2,3,4])
+      R2.makeBuilding({ zone, variant:0, _wx:0, _wy:1.2, _wz:0, built:true, prog:1 }, era);
+  R2._ensureBldBatches(0);
+  R2._wildInst = [{ mesh: new (await import('three')).InstancedMesh(R2._geo.rock, R2._mat(0x888888), 1) }];
+  R2.decoGroup.add(R2._wildInst[0].mesh);
+  R2._waveTex = new (await import('three')).CanvasTexture(makeCanvasStub());
+
+  const geoBefore = Object.keys(R2._geo).length;
+  const matBefore = R2._matCache.size;
+  assert(geoBefore > 40 && matBefore > 10, `负载就绪：_geo ${geoBefore} 键、_matCache ${matBefore} 个材质`);
+
+  // dispose 需要 renderer/controls 可为空（Node 下无 WebGL），故只看资源归零
+  R2.dispose();
+
+  assert(Object.keys(R2._geo).length === 0, `dispose 后 _geo 清空（${geoBefore} → 0）`);
+  assert(R2._matCache.size === 0, `dispose 后 _matCache 清空（${matBefore} → 0）`);
+  assert(R2._waveTex === null, 'dispose 后 _waveTex 置空');
+  assert(R2._bldInst === null && R2._treeInst === null && R2._wildInst === null,
+    'dispose 后三套合批批次全部释放');
+  assert(R2.buildingGroup.children.length === 0 && R2.decoGroup.children.length === 0,
+    'dispose 后场景组内无残留网格');
+  assert(R2.buildingMeshes.size === 0 && R2.wonderMeshes.size === 0, 'dispose 后网格映射表已清空');
+
+  // purgeMaterials(false) 只释放「未被引用」的材质，不误删在用材质
+  const R3 = Object.create(Renderer.prototype);
+  R3._initState(makeCanvasStub());
+  const keep = R3._mat(0x112233);
+  const mesh = new (await import('three')).Mesh(R3._geo.box, keep);
+  R3.scene = new (await import('three')).Scene();
+  R3.scene.add(mesh);
+  R3._mat(0x445566);            // 建了但没挂到任何网格上
+  const freed = R3.purgeMaterials(false);
+  assert(freed === 1, `purgeMaterials(false) 只释放未引用材质（释放 ${freed} 个）`);
+  assert(R3._matCache.size === 1, '在用材质被保留');
+}
+
 // ---- 11) 每类分区在每个时代都必须产出网格（防止分派遗漏导致"空地"）----
 for(let era=0; era<5; era++){
   for(const zone of [1,2,3,4]){
