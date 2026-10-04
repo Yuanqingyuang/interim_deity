@@ -113,6 +113,20 @@ npm run serve:test    # 另开一个终端保持运行（:8765）
 npm run test:browser
 ```
 
+> **关于浏览器**：`test/browser/browser.mjs` 是共用的启动器，**优先复用系统已装的
+> Chromium 系浏览器**（Windows 上的 Edge/Chrome、Linux 的 chromium/chrome、macOS 的
+> Chrome/Edge），找不到才回落 Playwright 自带构建。这样无需 `npx playwright install`
+> 下载数百 MB。可用环境变量覆盖：
+>
+> | 变量 | 作用 |
+> |---|---|
+> | `TD_BROWSER_PATH` | 直接指定浏览器可执行文件绝对路径（最高优先） |
+> | `TD_BROWSER` | 指定 channel，如 `msedge` / `chrome` |
+> | `TD_OUT` | 测试产物（截图、结果 JSON）输出目录 |
+>
+> `platform-test.mjs` 是三引擎 × 两设备档案的矩阵测试；Firefox/WebKit 需各自构建，
+> 未安装时该单元格记为 `SKIP`（不影响 chromium 单元格的 PASS 判定）。
+
 > **关于 `three` 解析垫片**：游戏在浏览器里通过 `index.html` 的 importmap 解析裸模块 `three`，
 > 因此**生产代码零依赖**。Node 不读 importmap，故 import 了 `render.js` 的测试在 Node 下会
 > 解析失败。`test/support/ensure-three-shim.mjs` 会在需要时把 `vendor/` 的内容复制到

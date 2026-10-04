@@ -9,6 +9,10 @@
   <meta http-equiv="Content-Security-Policy"
         content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; object-src 'none'; base-uri 'self'" />
   <title>实习神明 · Trainee Deity</title>
+  <!-- 图标：浏览器默认会请求 /favicon.ico，缺失时每次加载都产生一条 404
+       （会污染浏览器测试的 console.error 计数），故显式声明。
+       SVG 形态契合 CSP 的 img-src 'self'，无需放开额外来源。 -->
+  <link rel="icon" type="image/svg+xml" href="favicon.svg" />
   <link rel="stylesheet" href="styles.css" />
   <script type="importmap">
   {

@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="实习神明">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#241d16"/>
+      <stop offset="1" stop-color="#14100c"/>
+    </linearGradient>
+    <linearGradient id="star" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffe9a8"/>
+      <stop offset="1" stop-color="#e8b44a"/>
+    </linearGradient>
+  </defs>
+  <rect width="64" height="64" rx="14" fill="url(#bg)"/>
+  <rect x="1.5" y="1.5" width="61" height="61" rx="12.5" fill="none" stroke="#e8b44a" stroke-opacity="0.45" stroke-width="1.5"/>
+  <!-- 五角星徽：与顶栏星星、HUD 金色体系一致 -->
+  <path d="M32 11.5 38.9 25.6 54.4 27.9 43.2 38.8 45.9 54.3 32 46.9 18.1 54.3 20.8 38.8 9.6 27.9 25.1 25.6Z"
+        fill="url(#star)"/>
+  <!-- 中心光点：呼应「神力」 -->
+  <circle cx="32" cy="33" r="4.2" fill="#241d16" fill-opacity="0.55"/>
+</svg>

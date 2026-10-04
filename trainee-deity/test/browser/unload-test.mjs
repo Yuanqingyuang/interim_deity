@@ -1,13 +1,10 @@
 // 对照实验：旧页面卸载延迟的归因
 // A) 注册进游戏 → 立即二次 goto（预期慢 ~13s）
 // B) 注册进游戏 → 停 rAF 循环 → 二次 goto（若快 → 渲染循环是主因）
-import { chromium } from 'playwright-core';
+import { launchBrowser } from './browser.mjs';
 
 const URL = 'http://localhost:8080/?debug=1&seed=12345';
-const browser = await chromium.launch({
-  headless: true,
-  args: ['--no-sandbox', '--use-gl=angle', '--use-angle=swiftshader', '--ignore-gpu-blocklist', '--no-proxy-server'],
-});
+const browser = await launchBrowser();
 
 async function trial(tag, stopRaf) {
   const ctx = await browser.newContext({ viewport: { width: 1280, height: 720 } });

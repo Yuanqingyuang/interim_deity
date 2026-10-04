@@ -1,7 +1,7 @@
 // 安全专项（回归版）：①导入存档 meta 存储型 XSS —— 修复后预期被消毒、不执行
 //                     ②非安全上下文（crypto.subtle 缺失）—— 修复后预期 kdf 标签为 'FNV-1a-weak'
 // 运行前置：仓库根目录起静态服务（python3 -m http.server 8080），且本目录已 npm install
-import { chromium } from 'playwright-core';
+import { launchBrowser } from './browser.mjs';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -9,11 +9,7 @@ import path from 'path';
 const OUT = process.env.TD_OUT || path.join(os.tmpdir(), 'td-browser-out');
 fs.mkdirSync(path.join(OUT, 'shots'), { recursive: true });
 const out = {};
-const browser = await chromium.launch({
-  headless: true,
-  args: ['--no-sandbox', '--use-gl=angle', '--use-angle=swiftshader',
-         '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist', '--no-proxy-server'],
-});
+const browser = await launchBrowser();
 
 async function waitBoot(page, ms = 40000) {
   const t0 = Date.now();

@@ -1,4 +1,4 @@
-import { chromium } from 'playwright-core';
+import { launchBrowser } from './browser.mjs';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -40,11 +40,7 @@ async function waitBoot(page, timeoutMs) {
   return { ok: false, state, ms: Date.now() - t0 };
 }
 
-const browser = await chromium.launch({
-  headless: true,
-  args: ['--no-sandbox', '--use-gl=angle', '--use-angle=swiftshader',
-         '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist', '--no-proxy-server'],
-});
+const browser = await launchBrowser();
 const ctx = await browser.newContext({ viewport: { width: 1366, height: 768 } });
 const page = await ctx.newPage();
 page.on('console', m => {

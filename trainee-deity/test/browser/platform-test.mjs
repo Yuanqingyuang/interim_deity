@@ -2,6 +2,7 @@
 // boot 耗时 / WebGL 能力 / 注册→新游戏→建造→暂停→读档 主链路 / 布局健壮性 / 控制台错误 / 截图证据。
 // 引擎不可用时标记 skipped，不阻塞其余格子。
 import { chromium, firefox, webkit } from 'playwright-core';
+import { launchBrowser, resolveBrowserPath } from './browser.mjs';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -18,7 +19,9 @@ const BASE = 'http://localhost:8080/?debug=1&seed=12345';
 const PW = 'pw12345678';
 
 const ALL_ENGINES = [
-  { name: 'chromium', mod: chromium, args: ['--no-sandbox', '--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist'] },
+  // chromium 走共享启动器：优先复用系统已装的 Edge/Chrome，避免依赖
+  // `npx playwright install` 下载（数百 MB）。firefox/webkit 仍需各自构建。
+  { name: 'chromium', mod: chromium, sys: true, args: ['--no-sandbox', '--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist'] },
   { name: 'firefox', mod: firefox, args: [] },
   { name: 'webkit', mod: webkit, args: [] },
 ];
@@ -85,7 +88,9 @@ async function runCell(engine, profile) {
 
   let browser;
   try {
-    browser = await engine.mod.launch({ headless: true, args: engine.args, timeout: 45000 });
+    browser = engine.sys
+      ? await launchBrowser({ args: engine.args, timeout: 45000 })
+      : await engine.mod.launch({ headless: true, args: engine.args, timeout: 45000 });
   } catch (e) {
     cell.skipped = true;
     cell.skipReason = String(e).split('\n')[0].slice(0, 200);

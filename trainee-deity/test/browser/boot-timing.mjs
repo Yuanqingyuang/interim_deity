@@ -1,6 +1,6 @@
 // 精确测量 boot 耗时与主线程阻塞：全部在页面内计时，避免 evaluate 往返调度污染数据。
 // 场景对照：①无会话(auth) ②td_boot=new(start) ③带存档读取
-import { chromium } from 'playwright-core';
+import { launchBrowser } from './browser.mjs';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -10,11 +10,7 @@ fs.mkdirSync(OUT, { recursive: true });
 const URL = 'http://localhost:8080/?debug=1&seed=12345';
 const out = { runs: [] };
 
-const browser = await chromium.launch({
-  headless: true,
-  args: ['--no-sandbox', '--use-gl=angle', '--use-angle=swiftshader',
-         '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist', '--no-proxy-server'],
-});
+const browser = await launchBrowser();
 
 const INIT = () => {
   window.__boot = { marks: [], longTasks: [], resources: [] };

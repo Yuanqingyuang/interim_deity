@@ -1,7 +1,7 @@
 // P1 高人口压测（规划书 §4.4）：借助 ?debug=1 调试面板逐时代刷建筑/跳时代，
 // 采样 window.__perf（fps/frameMs/maxMs/drawCalls/triangles）与人口曲线，
 // 输出 E1→E5 建筑规模 vs 帧率数据，作为 §5「建筑代理比」决策输入。
-import { chromium } from 'playwright-core';
+import { launchBrowser } from './browser.mjs';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -37,11 +37,7 @@ async function waitBoot(page, timeoutMs) {
   return { ok: false, state, ms: Date.now() - t0 };
 }
 
-const browser = await chromium.launch({
-  headless: true,
-  args: ['--no-sandbox', '--use-gl=angle', '--use-angle=swiftshader',
-         '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist', '--no-proxy-server'],
-});
+const browser = await launchBrowser();
 const ctx = await browser.newContext({ viewport: { width: 1366, height: 768 } });
 const page = await ctx.newPage();
 page.setDefaultTimeout(30000);

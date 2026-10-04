@@ -1,6 +1,6 @@
 // 定向复现：连续读档是否造成 GPU 资源泄漏 / 渲染进程崩溃
 // 手段：注入 WebGL 调用计数（createXxx vs deleteXxx）+ CDP Performance.getMetrics + 强制 GC
-import { chromium } from 'playwright-core';
+import { launchBrowser } from './browser.mjs';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -12,11 +12,7 @@ const USER = 'qa_leak_' + Date.now().toString(36);
 const PW = 'pw12345678';
 const out = { glStats: [], heap: [], notes: [], crashed: null };
 
-const browser = await chromium.launch({
-  headless: true,
-  args: ['--no-sandbox', '--use-gl=angle', '--use-angle=swiftshader',
-         '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist', '--no-proxy-server'],
-});
+const browser = await launchBrowser();
 const ctx = await browser.newContext({ viewport: { width: 1280, height: 720 } });
 
 // 必须在页面脚本之前注入：包一层 getContext，统计 GL 对象的创建/销毁
