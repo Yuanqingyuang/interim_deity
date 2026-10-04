@@ -17,9 +17,9 @@ jobs:
         with:
           node-version: '20'
       - name: Lint（语法 + 安全危险模式）
-        run: node test/lint.mjs
-      - name: Unit Tests（9 项数值/存档/放置基线）
-        run: node test/run-all.mjs
+        run: node test/support/lint.mjs
+      - name: Unit Tests（数值 / 存档 / 放置 / 渲染构建器基线）
+        run: node test/support/run-all.mjs
 
   # ── 浏览器回归：Playwright，独立 job，不阻塞核心门禁 ──
   browser:

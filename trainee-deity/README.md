@@ -63,21 +63,61 @@ http://localhost:8080/?seed=123&debug=1
 
 ## 📂 项目结构
 
+**发布内容与测试内容严格分离**——部署包只含下面标「发布」的部分。
+
 ```
 trainee-deity/
-├── index.html
-├── styles.css
-├── numeric-design.md
-├── docs/
-│   ├── project-summary.md
-│   └── deploy.md
-├── vendor/three@0.161.0/
-├── test/
-└── js/
-    ├── main.js  config.js  formulas.js
-    ├── state.js  terrain.js  render.js
-    ├── ui.js  auth.js  saves.js  log.js
+├── index.html                 ← 发布
+├── styles.css                 ← 发布
+├── numeric-design.md          ← 发布（数值规范，随包附带）
+├── README.md                  ← 发布
+├── js/                        ← 发布：游戏源码（唯一的 src 目录，全部 ES Module）
+│   ├── main.js  config.js  formulas.js
+│   ├── state.js  terrain.js  render.js
+│   ├── ui.js  auth.js  saves.js  log.js
+│   └── audio.js
+├── vendor/three@0.161.0/      ← 发布：Three.js 本地化（离线可玩，无 CDN）
+├── docs/                      ← 开发文档（不进部署包）
+│   ├── project-summary.md  project-plan.md  deploy.md
+├── test/                      ← 测试（不进部署包）
+│   ├── *.test.mjs                自动化测试（npm test 自动发现）
+│   ├── browser/                  需真实浏览器的回归（Node 侧无法运行）
+│   └── support/                  测试脚手架与工具（本身不是测试）
+│       ├── run-all.mjs               测试运行器
+│       ├── lint.mjs                  静态检查器（语法 + 安全危险模式）
+│       └── ensure-three-shim.mjs     Node 侧 three 解析垫片（按需生成）
+├── .github/workflows/ci.yml   ← CI（不进部署包）
+└── package.json               开发脚本（不进部署包）
 ```
+
+### 工程约定
+
+| 约定 | 说明 |
+|---|---|
+| **生产代码位置** | 只有 `js/`。部署包 = `index.html` + `styles.css` + `js/` + `vendor/` + `README.md` + `numeric-design.md` |
+| **测试位置** | 只有 `test/`。测试发现规则：`test/*.test.mjs`（`test/support/` 与 `test/browser/` 不参与自动发现） |
+| **不要在 `js/` 里放测试代码或调试脚本** | 会随部署包上线。历史遗留的 `main.js __tdPan/__tdDbg` 压测探针是已知例外，仅 `?debug=1` 下暴露 |
+| **无 npm 运行时依赖** | 游戏零依赖，Three.js 走 `vendor/`；`node_modules/` 只可能由测试期垫片产生，已被 `.gitignore` 忽略 |
+| **每次改动后** | `npm run verify`（= lint + 全部测试）。CI 同样跑这两步 |
+
+### 测试与开发脚本
+
+```bash
+npm run verify        # lint + 全部自动化测试（提交前必跑）
+npm test              # 只跑测试
+npm run lint          # 只跑静态检查（语法 + eval/innerHTML 等危险模式）
+npm run shim          # 生成 Node 侧 three 解析垫片（一般不需要手动跑，测试会自动调用）
+
+# 浏览器回归（需真实浏览器 + 静态服务器，Node 侧跑不了）
+npm run serve:test    # 另开一个终端保持运行（:8765）
+npm run test:browser
+```
+
+> **关于 `three` 解析垫片**：游戏在浏览器里通过 `index.html` 的 importmap 解析裸模块 `three`，
+> 因此**生产代码零依赖**。Node 不读 importmap，故 import 了 `render.js` 的测试在 Node 下会
+> 解析失败。`test/support/ensure-three-shim.mjs` 会在需要时把 `vendor/` 的内容复制到
+> `node_modules/three/`（**不改 vendor 原件、不联网、不装 npm 包**），供 Node 侧测试使用；
+> 干净检出后第一次跑测试会自动生成，无需人工步骤。
 
 ---
 

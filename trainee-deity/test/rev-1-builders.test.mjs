@@ -12,10 +12,20 @@
 import { createRequire } from 'node:module';
 import fs from 'node:fs';
 import path from 'node:path';
+import { ensureThreeShim } from './support/ensure-three-shim.mjs';
 
 function assert(cond, msg){
   if(!cond) throw new Error('FAIL: ' + msg);
   console.log('  ok -', msg);
+}
+
+// ---- 0) 按需准备 Node 侧 `three` 解析垫片 ----
+// 浏览器靠 index.html 的 importmap 解析裸模块 three；Node 不读 importmap，
+// 故本测试在 import render.js 之前先确保垫片存在（test/support/ensure-three-shim.mjs）。
+// 垫片是测试期产物、已被 .gitignore 忽略，干净检出后自动生成，无需人工步骤。
+if(!ensureThreeShim({ quiet: true })){
+  console.error('SKIP: 无法准备 three 垫片（vendor 缺失？）—— 跳过渲染构建器测试');
+  process.exit(0);
 }
 
 // ---- 1) 最小 DOM 桩件 ----

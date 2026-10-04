@@ -1,14 +1,17 @@
-// 零依赖静态检查器（G-12）：语法校验 + 安全危险模式扫描
+// 测试支持：静态检查器（原 test/lint.mjs，2026-10 迁入 test/support/）
+//
+// 定位：这是**支持测试的工具**，不是测试本身 —— 因此放在 test/support/，
+// 且不参与 `npm test` 的测试发现（只匹配 *.test.mjs）。
 // 设计取舍：本项目刻意保持「无 npm 运行时依赖」（three.js 走 vendor），
 // 因此不引入 ESLint，而用本脚本承担 lint 职责，保证 CI 与本地离线均可运行。
-// 用法：node test/lint.mjs   （npm run lint 即调用此脚本）
+// 用法：node test/support/lint.mjs   （npm run lint 即调用此脚本）
 // 退出码：0=通过，1=存在问题
 import { readFileSync, readdirSync, statSync } from 'fs';
 import { join, relative } from 'path';
 import { execFileSync } from 'child_process';
 import { fileURLToPath } from 'url';
 
-const ROOT = fileURLToPath(new URL('..', import.meta.url));
+const ROOT = fileURLToPath(new URL('../../', import.meta.url));
 const rel = (p) => relative(ROOT, p);
 
 // 递归收集 .js/.mjs，排除 vendor 与 node_modules 及隐藏目录
@@ -27,7 +30,7 @@ const allFiles = [];
 for (const d of ['js', 'test']) {
   try { walk(join(ROOT, d), allFiles); } catch { /* 目录缺失则跳过 */ }
 }
-// 安全模式扫描只针对随产品发布的 js/ 面（测试脚本可能合法携带 XSS  payload 字符串）
+// 安全模式扫描只针对随产品发布的 js/ 面（测试脚本可能合法携带 XSS payload 字符串）
 const shippedFiles = allFiles.filter((f) => rel(f).startsWith('js'));
 
 let errors = 0;
