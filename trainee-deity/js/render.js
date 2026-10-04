@@ -224,6 +224,19 @@ export class Renderer {
       towerSquare: new THREE.BoxGeometry(0.24, 1, 0.24),           // 方钟楼（工业时代）
       column: new THREE.CylinderGeometry(0.05, 0.05, 0.34, 6),     // 柱廊圆柱（城邦）
       pediment: new THREE.ConeGeometry(0.26, 0.12, 4),             // 三角楣（城邦）
+      // ---- 农田 / 教堂的时代形体几何（2026-10，见 时代建筑外观规划.md）----
+      ridge: new THREE.BoxGeometry(0.70, 0.05, 0.05),              // 田埂（城邦石砌）
+      furrow: new THREE.BoxGeometry(0.06, 0.04, 0.62),             // 田垄（封建条带）
+      flatBed: new THREE.BoxGeometry(0.74, 0.05, 0.74),            // 整块田床（工业机械化）
+      shedBarn: new THREE.BoxGeometry(0.30, 0.18, 0.22),           // 田头仓房
+      growTray: new THREE.BoxGeometry(0.66, 0.04, 0.12),           // 垂直农场层板
+      millTower: new THREE.CylinderGeometry(0.07, 0.09, 0.34, 6),  // 磨坊塔身（封建）
+      millBlade: new THREE.BoxGeometry(0.04, 0.26, 0.02),          // 风车叶片
+      menhir: new THREE.BoxGeometry(0.10, 0.36, 0.08),             // 立石/巨石阵柱（蛮荒）
+      postBeam: new THREE.BoxGeometry(0.62, 0.08, 0.10),           // 石楣横梁
+      bellTower: new THREE.BoxGeometry(0.22, 0.42, 0.22),          // 方形钟楼（工业时代）
+      haloRing: new THREE.TorusGeometry(0.20, 0.02, 4, 10),         // 悬浮光环（星际教堂）
+      gothicArch: new THREE.BoxGeometry(0.07, 0.20, 0.03),         // 尖拱窗（哥特）
     };
     this._matCache = new Map();
     this._wildHeights = null;
@@ -789,27 +802,82 @@ export class Renderer {
     return this._makeHouse(t, era);
   }
 
-  _makeFarm(t, era=0){
+  // 农田：按时代形体分派（2026-10，见 时代建筑外观规划.md）
+  //   E1 不规则小块+木栅 · E2 石埂方田 · E3 条垄+磨坊 · E4 机械化大块+仓房 · E5 垂直农场层板
+  // 配色仍由 FARM_CROP / FARM_SOIL 按时代决定（本轮不改配色），此处只改形体。
+  _makeFarm(t, era = 0){
     const grp = new THREE.Group();
     const varn = t.variant % 3;
     const e = Math.max(0, Math.min(4, era|0));
-    const field = new THREE.Mesh(this._geo.field, this._mat(FARM_SOIL[e] ?? 0x8b6914));
-    field.position.y = 0.03; field.receiveShadow = true;
-    grp.add(field);
+    const soilMat = this._mat(FARM_SOIL[e] ?? 0x8b6914);
     const cropPal = FARM_CROP[e] || FARM_CROP[0];
     const cropCol = cropPal[varn % cropPal.length];
-    for(let i=-1;i<=1;i++){
-      const crop = new THREE.Mesh(this._geo.crop, this._mat(cropCol));
-      crop.position.set(i*0.2, 0.16 + varn*0.03, 0);
-      crop.scale.y = 0.85 + varn*0.12;
-      crop.castShadow = true;
-      grp.add(crop);
+    const cropMat = this._mat(cropCol);
+
+    const add = (geoKey, mat, scale, pos, rot = null, shadow = true)=>{
+      const m = new THREE.Mesh(this._geo[geoKey], mat);
+      if(Array.isArray(scale)) m.scale.set(scale[0], scale[1], scale[2]);
+      else if(scale !== null) m.scale.setScalar(scale);
+      m.position.set(pos[0], pos[1], pos[2]);
+      if(rot){ m.rotation.x = rot[0] || 0; m.rotation.y = rot[1] || 0; m.rotation.z = rot[2] || 0; }
+      if(shadow) m.castShadow = true;
+      m.receiveShadow = true;
+      grp.add(m);
+      return m;
+    };
+
+    if(e === 0){
+      // ---- E1 蛮荒：不规则小块 + 木栅栏 + 零散作物（无规整田埂）----
+      add('field', soilMat, [0.80, 1, 0.66], [0.02, 0.03, -0.03], [0, 0.22, 0], false);
+      for(let i=0;i<4;i++){
+        const cx = -0.24 + i*0.16, cz = (i % 2 ? 0.14 : -0.12);
+        add('crop', cropMat, [1, 0.8 + (i%2)*0.25, 1], [cx, 0.15, cz], [0, 0.3 - i*0.2, 0]);
+      }
+      for(const [fx,fz,ry] of [[0,-0.36,0],[0,0.40,0],[-0.40,0,Math.PI/2]]){
+        add('fence', this._mat(0xa08050), null, [fx, 0.10, fz], [0, ry, 0]);
+      }
+      // 一块翻土（不规则感）
+      add('field', soilMat, [0.34, 1, 0.30], [-0.22, 0.04, 0.20], [0, -0.35, 0], false);
+
+    } else if(e === 1){
+      // ---- E2 城邦：规整方田 + 石砌矮埂 ----
+      add('field', soilMat, null, [0, 0.03, 0], null, false);
+      for(let i=-1;i<=1;i++) add('crop', cropMat, [1, 0.9, 1], [i*0.22, 0.16, 0]);
+      for(const [fx,fz,ry] of [[0,-0.37,0],[0,0.37,0]]) add('ridge', this._mat(0xb7aea0), null, [fx, 0.05, fz], [0, ry, 0]);
+      for(const [fx,fz,rx] of [[-0.37,0,0],[0.37,0,0]]) add('ridge', this._mat(0xb7aea0), null, [fx, 0.05, fz], [0, 0, rx]);
+
+    } else if(e === 2){
+      // ---- E3 封建：条带状田垄 + 田头磨坊（部分变体）----
+      add('field', soilMat, null, [0, 0.03, 0], null, false);
+      for(let i=-1;i<=1;i++) add('furrow', this._mat(0x6d4c41), null, [i*0.22, 0.07, 0], null, false);
+      for(let i=0;i<3;i++) add('crop', cropMat, [1, 0.85 + (i%2)*0.2, 1], [0, 0.15, -0.20 + i*0.20], [0, Math.PI/2, 0]);
+      if(varn === 2){
+        add('millTower', this._mat(0xb7aea0), null, [0.30, 0.17, -0.30]);
+        for(let i=0;i<4;i++){
+          add('millBlade', this._mat(0x8b6914), null, [0.30, 0.34, -0.30], [0, 0, i*Math.PI/2]);
+        }
+      }
+
+    } else if(e === 3){
+      // ---- E4 工业：整块机械化田 + 田头仓房 + 筒仓 ----
+      add('flatBed', soilMat, null, [0, 0.03, 0], null, false);
+      for(let i=0;i<3;i++) add('crop', cropMat, [1.25, 0.75, 1], [0, 0.12, -0.20 + i*0.20], [0, Math.PI/2, 0]);
+      add('shedBarn', this._mat(0x7a5c4e), null, [-0.26, 0.10, 0.24]);
+      add('silo', this._mat(0x9da8ba), [1.1, 0.9, 1.1], [0.28, 0.14, 0.26]);
+      add('siloCone', this._mat(0x55616e), [1.1, 0.9, 1.1], [0.28, 0.28, 0.26]);
+
+    } else {
+      // ---- E5 星际：垂直农场（多层悬空层板）+ 发光环带 ----
+      add('field', soilMat, [0.86, 1, 0.86], [0, 0.03, 0], null, false);
+      for(let lv=0; lv<3; lv++){
+        const y = 0.14 + lv*0.15;
+        add('growTray', this._mat(0x37474f), [1 + lv*0.06, 1, 1], [0, y, -0.16 + lv*0.16]);
+        add('crop', cropMat, [1.1, 0.55, 0.55], [0, y + 0.05, -0.16 + lv*0.16]);
+      }
+      const glow = this._basicMat(0x64ffda);
+      add('glowRing', glow, [1.25, 0.5, 1.25], [0, 0.06, 0], null, false);
     }
-    for(const [fx,fz,ry] of [[0,-0.36,0],[0,0.36,0]]){
-      const f = new THREE.Mesh(this._geo.fence, this._mat(0xa08050));
-      f.position.set(fx, 0.1, fz); f.rotation.y = ry;
-      grp.add(f);
-    }
+
     grp.position.set(t._wx, 0, t._wz);
     return grp;
   }
@@ -972,6 +1040,219 @@ export class Renderer {
 
   // 信仰区：教堂 — 奶油石墙、深石板尖顶、尖塔十字、玫瑰窗
   _makeChurch(t, era){
+    const e = Math.max(0, Math.min(4, era|0));
+    if(e === 0) return this._makeChurchMegalith(t, era);
+    if(e === 1) return this._makeChurchTemple(t, era);
+    if(e === 3) return this._makeChurchNeoclassic(t, era);
+    if(e === 4) return this._makeChurchStar(t, era);
+    return this._makeChurchGothic(t, era);
+  }
+
+  /** E1 蛮荒：巨石阵 —— 一圈立石 + 石楣横梁，无屋顶无尖塔 */
+  _makeChurchMegalith(t, era){
+    const C = churchStyleForEra(era);
+    const grp = new THREE.Group();
+    const varn = t.variant % 3;
+    const r = 0.30 + varn*0.02;
+    const stoneMat = this._mat(C.stone);
+    const wallMat = this._mat(C.wall);
+
+    const pad = new THREE.Mesh(this._geo.padRound, stoneMat);
+    pad.scale.set(r*3.4, 1, r*3.4);
+    pad.position.y = 0.02; pad.receiveShadow = true;
+    grp.add(pad);
+
+    // 8 根立石围成环
+    const N = 8;
+    const h = 0.30 + varn*0.05;
+    for(let i=0;i<N;i++){
+      const a = i / N * Math.PI*2;
+      const m = new THREE.Mesh(this._geo.menhir, stoneMat);
+      m.scale.set(1, h/0.36, 1);
+      m.position.set(Math.cos(a)*r, h/2, Math.sin(a)*r);
+      m.rotation.y = -a;
+      m.castShadow = true; m.receiveShadow = true;
+      grp.add(m);
+    }
+    // 石楣横梁（只架四段，留出入口感）
+    for(let i=0;i<4;i++){
+      const a = (i + 0.5) / 4 * Math.PI*2;
+      const beam = new THREE.Mesh(this._geo.postBeam, stoneMat);
+      beam.scale.set(r*1.9, 1, 1);
+      beam.position.set(Math.cos(a)*r*0.92, h + 0.04, Math.sin(a)*r*0.92);
+      beam.rotation.y = -a + Math.PI/2;
+      beam.castShadow = true;
+      grp.add(beam);
+    }
+    // 中央祭坛石
+    const altar = new THREE.Mesh(this._geo.houseBody, wallMat);
+    altar.scale.set(0.22, 0.10, 0.22);
+    altar.position.y = 0.05;
+    altar.castShadow = true; altar.receiveShadow = true;
+    grp.add(altar);
+
+    grp.rotation.y = (hash2(t._wx|0, t._wz|0, t.variant) - 0.5) * 0.5;
+    grp.position.set(t._wx, 0, t._wz);
+    return grp;
+  }
+
+  /** E2 城邦：柱廊神庙 —— 平顶方体 + 正面六柱 + 三角楣 */
+  _makeChurchTemple(t, era){
+    const C = churchStyleForEra(era);
+    const grp = new THREE.Group();
+    const varn = t.variant % 3;
+    const w = 0.52 + varn*0.03, d = 0.62 + varn*0.03, h = 0.42 + varn*0.05;
+    const wallMat = this._mat(C.wall);
+    const stoneMat = this._mat(C.stone);
+    const roofMat = this._mat(C.roof);
+
+    const pad = new THREE.Mesh(this._geo.pad, stoneMat);
+    pad.scale.set(w*1.3, 1, d*1.25);
+    pad.position.y = 0.03; pad.receiveShadow = true;
+    grp.add(pad);
+    const base = new THREE.Mesh(this._geo.houseBody, stoneMat);
+    base.scale.set(w*1.18, 0.06, d*1.15);
+    base.position.y = 0.06; base.receiveShadow = true;
+    grp.add(base);
+
+    const body = new THREE.Mesh(this._geo.houseBody, wallMat);
+    body.scale.set(w, h, d);
+    body.position.y = 0.09 + h/2;
+    body.castShadow = true; body.receiveShadow = true;
+    grp.add(body);
+    const cornice = new THREE.Mesh(this._geo.eave, roofMat);
+    cornice.scale.set(w*1.16/0.78, 1, d*1.12/0.78);
+    cornice.position.y = 0.09 + h + 0.02;
+    cornice.castShadow = true;
+    grp.add(cornice);
+    for(let i=0;i<3;i++){
+      for(const side of [-1, 1]){
+        const col = new THREE.Mesh(this._geo.column, stoneMat);
+        col.scale.set(1, (h + 0.09)/0.34, 1);
+        col.position.set((-1 + i) * w*0.36, (h + 0.09)/2, side * d*0.56);
+        col.castShadow = true;
+        grp.add(col);
+      }
+    }
+    for(const side of [-1, 1]){
+      const ped = new THREE.Mesh(this._geo.pediment, roofMat);
+      ped.scale.set(w*1.5, 1.0, 1);
+      ped.position.set(0, 0.09 + h + 0.10, side * d*0.50);
+      ped.rotation.y = Math.PI/4;
+      ped.castShadow = true;
+      grp.add(ped);
+    }
+
+    grp.rotation.y = (hash2(t._wx|0, t._wz|0, t.variant) - 0.5) * 0.14;
+    grp.position.set(t._wx, 0, t._wz);
+    return grp;
+  }
+
+  /** E4 工业：新古典 —— 平顶 + 山墙 + 方形钟楼（无尖顶，与封建哥特区分） */
+  _makeChurchNeoclassic(t, era){
+    const C = churchStyleForEra(era);
+    const grp = new THREE.Group();
+    const varn = t.variant % 3;
+    const w = 0.56 + varn*0.03, d = 0.60 + varn*0.03, h = 0.50 + varn*0.04;
+    const wallMat = this._mat(C.wall);
+    const sideMat = this._mat(C.side);
+    const roofMat = this._mat(C.roof);
+
+    const pad = new THREE.Mesh(this._geo.pad, sideMat);
+    pad.scale.set(w*1.24, 1, d*1.20);
+    pad.position.y = 0.03; pad.receiveShadow = true;
+    grp.add(pad);
+    const body = new THREE.Mesh(this._geo.houseBody, wallMat);
+    body.scale.set(w, h, d);
+    body.position.y = h/2;
+    body.castShadow = true; body.receiveShadow = true;
+    grp.add(body);
+    const flat = new THREE.Mesh(this._geo.houseBody, roofMat);
+    flat.scale.set(w*1.06, 0.04, d*1.06);
+    flat.position.y = h + 0.02; flat.castShadow = true;
+    grp.add(flat);
+    for(const side of [-1, 1]){
+      const ped = new THREE.Mesh(this._geo.pediment, wallMat);
+      ped.scale.set(w*1.45, 1.1, 1);
+      ped.position.set(0, h*0.55, side * d*0.52);
+      ped.rotation.y = Math.PI/4;
+      grp.add(ped);
+    }
+    for(let i=0;i<4;i++){
+      const col = new THREE.Mesh(this._geo.column, this._mat(C.stone));
+      col.scale.set(1, (h*0.62)/0.34, 1);
+      col.position.set((-1.5 + i) * w*0.28, h*0.31, d*0.56);
+      grp.add(col);
+    }
+    const tower = new THREE.Mesh(this._geo.bellTower, wallMat);
+    tower.scale.set(1, (h*2.0)/0.42, 1);
+    tower.position.set(0, h*1.0, -d*0.18);
+    tower.castShadow = true; tower.receiveShadow = true;
+    grp.add(tower);
+    const cap = new THREE.Mesh(this._geo.houseBody, roofMat);
+    cap.scale.set(0.26, 0.05, 0.26);
+    cap.position.set(0, h*2.0 + 0.03, -d*0.18);
+    cap.castShadow = true;
+    grp.add(cap);
+    const face = new THREE.Mesh(this._geo.rose, this._basicMat(C.glow));
+    face.rotation.x = Math.PI/2;
+    face.position.set(0, h*1.55, -d*0.18 + 0.13);
+    grp.add(face);
+
+    grp.rotation.y = (hash2(t._wx|0, t._wz|0, t.variant) - 0.5) * 0.10;
+    grp.position.set(t._wx, 0, t._wz);
+    return grp;
+  }
+
+  /** E5 星际：悬浮光环 —— 尖塔 + 环带 + 发光顶球 */
+  _makeChurchStar(t, era){
+    const C = churchStyleForEra(era);
+    const grp = new THREE.Group();
+    const varn = t.variant % 3;
+    const h = 0.78 + varn*0.08;
+    const wallMat = this._mat(C.wall);
+    const glowMat = this._basicMat(C.glow);
+
+    const pad = new THREE.Mesh(this._geo.padRound, this._mat(C.stone));
+    pad.scale.set(1.20, 1, 1.20);
+    pad.position.y = 0.02; pad.receiveShadow = true;
+    grp.add(pad);
+    const ring0 = new THREE.Mesh(this._geo.glowRing, glowMat);
+    ring0.scale.set(1.15, 1, 1.15);
+    ring0.position.y = 0.06;
+    grp.add(ring0);
+    const spire = new THREE.Mesh(this._geo.spireTall, wallMat);
+    spire.scale.set(1.35, h/0.66, 1.35);
+    spire.position.y = 0.06 + h/2;
+    spire.rotation.y = Math.PI/4;
+    spire.castShadow = true; spire.receiveShadow = true;
+    grp.add(spire);
+    for(let i=0;i<2;i++){
+      const halo = new THREE.Mesh(this._geo.haloRing, glowMat);
+      halo.scale.setScalar(1.1 + i*0.45);
+      halo.position.y = 0.06 + h*(0.42 + i*0.34);
+      halo.rotation.x = Math.PI/2;
+      grp.add(halo);
+    }
+    const ball = new THREE.Mesh(this._geo.spireBall, glowMat);
+    ball.scale.setScalar(1.8);
+    ball.position.y = 0.06 + h + 0.06;
+    grp.add(ball);
+    for(let i=0;i<4;i++){
+      const a = i/4*Math.PI*2;
+      const band = new THREE.Mesh(this._geo.glowBand, glowMat);
+      band.scale.set(1, h/0.34, 1);
+      band.position.set(Math.cos(a)*0.14, 0.06 + h/2, Math.sin(a)*0.14);
+      grp.add(band);
+    }
+
+    grp.rotation.y = (hash2(t._wx|0, t._wz|0, t.variant) - 0.5) * 0.10;
+    grp.position.set(t._wx, 0, t._wz);
+    return grp;
+  }
+
+  /** E3 封建：哥特 —— 高窄中殿 + 尖拱窗 + 高尖塔 + 飞扶壁（原实现改名保留） */
+  _makeChurchGothic(t, era){
     const C = churchStyleForEra(era);
     const grp = new THREE.Group();
     const varn = t.variant % 3;

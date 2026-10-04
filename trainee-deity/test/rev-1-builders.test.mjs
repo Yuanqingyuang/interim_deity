@@ -172,7 +172,43 @@ assert(f5.has('bodyCyl') && f5.has('glowRing') && !f5.has('saw'), `E5 工业为�
 const fSigs = [0,1,2,3,4].map(e => [...geoKeysOf(e, 3, 0)].sort().join('|'));
 assert(new Set(fSigs).size >= 4, `工业形体至少 4 种互不相同（${new Set(fSigs).size}/5）`);
 
-// ---- 8) 每类分区在每个时代都必须产出网格（防止分派遗漏导致"空地"）----
+// ---- 8) 农田（zone 2）形体：不规则木栅 / 石埂 / 田垄+磨坊 / 机械化田 / 垂直农场 ----
+const a1 = geoKeysOf(0, 2, 0);
+assert(a1.has('fence') && !a1.has('ridge'), `E1 农田为不规则小块+木栅（${[...a1].join(',')}）`);
+const a2 = geoKeysOf(1, 2, 0);
+assert(a2.has('ridge'), `E2 农田含石砌矮埂（${[...a2].join(',')}）`);
+const a3 = geoKeysOf(2, 2, 2);
+assert(a3.has('furrow'), `E3 农田含条带田垄（${[...a3].join(',')}）`);
+assert(a3.has('millTower') && a3.has('millBlade'), `E3 varn2 农田含田头磨坊（${[...a3].join(',')}）`);
+const a4 = geoKeysOf(3, 2, 0);
+assert(a4.has('flatBed') && a4.has('silo'), `E4 农田为机械化整块+筒仓（${[...a4].join(',')}）`);
+const a5 = geoKeysOf(4, 2, 0);
+assert(a5.has('growTray'), `E5 农田为垂直农场层板（${[...a5].join(',')}）`);
+const aSigs = [0,1,2,3,4].map(e => [...geoKeysOf(e, 2, 0)].sort().join('|'));
+assert(new Set(aSigs).size === 5, `农田形体五时代两两不同（${new Set(aSigs).size}/5）`);
+
+// ---- 9) 教堂（zone 4）形体：巨石阵 / 柱廊神庙 / 哥特 / 新古典 / 悬浮光环 ----
+const c1 = geoKeysOf(0, 4, 0);
+assert(c1.has('menhir') && c1.has('postBeam') && !c1.has('column'), `E1 教堂为巨石阵（${[...c1].join(',')}）`);
+const c2 = geoKeysOf(1, 4, 0);
+assert(c2.has('column') && c2.has('pediment'), `E2 教堂为柱廊神庙（${[...c2].join(',')}）`);
+const c3 = geoKeysOf(2, 4, 0);
+assert(c3.has('churchSpire') && c3.has('churchTower'), `E3 教堂为哥特尖塔（${[...c3].join(',')}）`);
+const c4 = geoKeysOf(3, 4, 0);
+assert(c4.has('bellTower') && !c4.has('churchSpire'), `E4 教堂为方钟楼新古典、无尖顶（${[...c4].join(',')}）`);
+const c5 = geoKeysOf(4, 4, 0);
+assert(c5.has('haloRing') && c5.has('spireTall'), `E5 教堂为悬浮光环（${[...c5].join(',')}）`);
+const cSigs = [0,1,2,3,4].map(e => [...geoKeysOf(e, 4, 0)].sort().join('|'));
+assert(new Set(cSigs).size === 5, `教堂形体五时代两两不同（${new Set(cSigs).size}/5）`);
+
+// ---- 10) 四类分区在每个时代都必须有形体重构（全矩阵差异检查）----
+for(const zone of [1,2,3,4]){
+  const sigs = [0,1,2,3,4].map(e => [...geoKeysOf(e, zone, 0)].sort().join('|'));
+  assert(new Set(sigs).size >= 4,
+    `zone${zone} 的五时代形体至少 4 种互不相同（${new Set(sigs).size}/5）`);
+}
+
+// ---- 11) 每类分区在每个时代都必须产出网格（防止分派遗漏导致"空地"）----
 for(let era=0; era<5; era++){
   for(const zone of [1,2,3,4]){
     for(let variant=0; variant<3; variant++){
