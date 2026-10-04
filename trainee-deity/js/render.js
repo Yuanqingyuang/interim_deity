@@ -201,6 +201,28 @@ export class Renderer {
       field: new THREE.BoxGeometry(0.74, 0.06, 0.74),
       eave: new THREE.BoxGeometry(0.78, 0.06, 0.78),
       lintelDoor: new THREE.BoxGeometry(0.24, 0.05, 0.05),
+
+      // ---- 原为 _makeChurchGothic/_makeSawFactory 内的惰性创建，2026-10 审计发现其导致
+      //      六个构件永久缺失（E1 窑口、E2/E3 作坊烟道、E4 长屋采光面、E4 玫瑰窗、
+      //      E5 顶球/排气塔），且 Mesh(undefined) 静默降级为空几何使测试无法察觉。
+      //      约定：_geo 必须在构造期完整，任何 _make* 内不得再 new THREE.* ----
+      nave: new THREE.BoxGeometry(1, 1, 1),
+      churchRoof: new THREE.ConeGeometry(0.42, 0.7, 4),
+      churchTower: new THREE.BoxGeometry(0.28, 1, 0.28),
+      churchSpire: new THREE.ConeGeometry(0.18, 0.55, 4),
+      crossV: new THREE.BoxGeometry(0.03, 0.18, 0.03),
+      crossH: new THREE.BoxGeometry(0.12, 0.03, 0.03),
+      spireBall: new THREE.SphereGeometry(0.06, 6, 5),
+      archDoor: new THREE.BoxGeometry(0.14, 0.22, 0.04),
+      rose: new THREE.CylinderGeometry(0.07, 0.07, 0.03, 8),
+      churchWin: new THREE.BoxGeometry(0.06, 0.18, 0.03),
+      shed: new THREE.BoxGeometry(1, 1, 1),
+      saw: new THREE.BoxGeometry(0.14, 0.08, 0.55),
+      sawGlass: new THREE.BoxGeometry(0.1, 0.1, 0.02),
+      brickChim: new THREE.CylinderGeometry(0.07, 0.10, 1, 6),
+      chimBand: new THREE.CylinderGeometry(0.11, 0.11, 0.05, 6),
+      dock: new THREE.BoxGeometry(0.22, 0.18, 0.04),
+      facWin: new THREE.BoxGeometry(0.18, 0.08, 0.03),
       // ---- 民宅构件（2026-10 重构：原为 _makeHouse 内懒创建，改形体分派后集中到此，
       //      保证 _geo 在构造期即完整——否则 _houseBox/_houseRound 会取到 undefined 几何）----
       pad: new THREE.BoxGeometry(1, 0.04, 1),
@@ -1335,7 +1357,6 @@ export class Renderer {
     const stoneMat = this._mat(C.stone);
 
     // 石基座
-    if(!this._geo.pad) this._geo.pad = new THREE.BoxGeometry(1, 0.04, 1);
     const pad = new THREE.Mesh(this._geo.pad, stoneMat);
     pad.scale.set(0.72, 1, 0.82);
     pad.position.y = 0.02;
@@ -1343,7 +1364,6 @@ export class Renderer {
     grp.add(pad);
 
     // 中殿（纵向长殿）
-    if(!this._geo.nave) this._geo.nave = new THREE.BoxGeometry(1, 1, 1);
     const nave = new THREE.Mesh(this._geo.nave, wallMat);
     nave.scale.set(naveW, naveH, naveL);
     nave.position.set(0, naveH/2, 0.02);
@@ -1359,7 +1379,6 @@ export class Renderer {
     grp.add(aisle);
 
     // 陡峭人字顶（教堂标志）
-    if(!this._geo.churchRoof) this._geo.churchRoof = new THREE.ConeGeometry(0.42, 0.7, 4);
     const roof = new THREE.Mesh(this._geo.churchRoof, roofMat);
     roof.position.set(0, naveH + 0.32, 0.02);
     roof.scale.set(naveW/0.42 * 1.15, 1, naveL/0.42 * 0.95);
@@ -1369,14 +1388,12 @@ export class Renderer {
 
     // 西立面钟塔 + 尖顶 + 十字
     const towerH = naveH * 1.55;
-    if(!this._geo.churchTower) this._geo.churchTower = new THREE.BoxGeometry(0.28, 1, 0.28);
     const tower = new THREE.Mesh(this._geo.churchTower, wallMat);
     tower.scale.set(1, towerH, 1);
     tower.position.set(0, towerH/2, naveL*0.42);
     tower.castShadow = true;
     grp.add(tower);
 
-    if(!this._geo.churchSpire) this._geo.churchSpire = new THREE.ConeGeometry(0.18, 0.55, 4);
     const spire = new THREE.Mesh(this._geo.churchSpire, this._mat(C.roofDeep));
     spire.position.set(0, towerH + 0.26, naveL*0.42);
     spire.rotation.y = Math.PI/4;
@@ -1384,8 +1401,6 @@ export class Renderer {
     grp.add(spire);
 
     // 十字架（金饰）
-    if(!this._geo.crossV) this._geo.crossV = new THREE.BoxGeometry(0.03, 0.18, 0.03);
-    if(!this._geo.crossH) this._geo.crossH = new THREE.BoxGeometry(0.12, 0.03, 0.03);
     const crossMat = this._mat(C.accent, { roughness:0.4, metalness:0.5 });
     const cv = new THREE.Mesh(this._geo.crossV, crossMat);
     cv.position.set(0, towerH + 0.58, naveL*0.42);
@@ -1395,26 +1410,22 @@ export class Renderer {
     grp.add(ch);
 
     // 塔顶发光球
-    if(!this._geo.spireBall) this._geo.spireBall = new THREE.SphereGeometry(0.06, 6, 5);
     const ball = new THREE.Mesh(this._geo.spireBall, this._basicMat(C.glow));
     ball.position.set(0, towerH + 0.72, naveL*0.42);
     grp.add(ball);
 
     // 拱门
-    if(!this._geo.archDoor) this._geo.archDoor = new THREE.BoxGeometry(0.14, 0.22, 0.04);
     const arch = new THREE.Mesh(this._geo.archDoor, this._mat(C.roofDeep));
     arch.position.set(0, 0.12, naveL*0.42 + 0.16);
     grp.add(arch);
 
     // 玫瑰窗（圆窗）
-    if(!this._geo.rose) this._geo.rose = new THREE.CylinderGeometry(0.07, 0.07, 0.03, 8);
     const rose = new THREE.Mesh(this._geo.rose, this._basicMat(C.window));
     rose.rotation.x = Math.PI/2;
     rose.position.set(0, towerH*0.72, naveL*0.42 + 0.16);
     grp.add(rose);
 
     // 侧窗（高窄条）
-    if(!this._geo.churchWin) this._geo.churchWin = new THREE.BoxGeometry(0.06, 0.18, 0.03);
     const winMat = this._basicMat(C.window);
     for(const wz of [-0.12, 0.12]){
       const w = new THREE.Mesh(this._geo.churchWin, winMat);
@@ -1602,7 +1613,6 @@ export class Renderer {
     const brickMat = this._mat(F.brick);
 
     // 混凝土基座
-    if(!this._geo.pad) this._geo.pad = new THREE.BoxGeometry(1, 0.04, 1);
     const pad = new THREE.Mesh(this._geo.pad, sideMat);
     pad.scale.set(fw*1.15, 1, fl*1.1);
     pad.position.y = 0.02;
@@ -1610,7 +1620,6 @@ export class Renderer {
     grp.add(pad);
 
     // 主厂房（宽扁）
-    if(!this._geo.shed) this._geo.shed = new THREE.BoxGeometry(1, 1, 1);
     const shed = new THREE.Mesh(this._geo.shed, wallMat);
     shed.scale.set(fw, bh, fl);
     shed.position.y = bh/2;
@@ -1618,7 +1627,6 @@ export class Renderer {
     grp.add(shed);
 
     // 锯齿屋顶条（工业厂房特征）
-    if(!this._geo.saw) this._geo.saw = new THREE.BoxGeometry(0.14, 0.08, 0.55);
     const nSaw = 3;
     for(let i=0;i<nSaw;i++){
       const saw = new THREE.Mesh(this._geo.saw, roofMat);
@@ -1627,15 +1635,12 @@ export class Renderer {
       saw.castShadow = true;
       grp.add(saw);
       // 采光面
-      if(!this._geo.sawGlass) this._geo.sawGlass = new THREE.BoxGeometry(0.1, 0.1, 0.02);
       const glass = new THREE.Mesh(this._geo.sawGlass, this._basicMat(F.window));
       glass.position.set(sx + 0.05, bh + 0.12, fl*0.28);
       grp.add(glass);
     }
 
     // 砖烟囱（比房高很多，工业标识）
-    if(!this._geo.brickChim) this._geo.brickChim = new THREE.CylinderGeometry(0.07, 0.10, 1, 6);
-    if(!this._geo.chimBand) this._geo.chimBand = new THREE.CylinderGeometry(0.11, 0.11, 0.05, 6);
     const chimH = Math.min(1.1, Math.max(0.55, bh * 1.4 + 0.25));
     const chim = new THREE.Mesh(this._geo.brickChim, brickMat);
     chim.scale.set(1, chimH, 1);
@@ -1647,13 +1652,11 @@ export class Renderer {
     grp.add(band);
 
     // 装卸口 / 卷帘门
-    if(!this._geo.dock) this._geo.dock = new THREE.BoxGeometry(0.22, 0.18, 0.04);
     const dock = new THREE.Mesh(this._geo.dock, this._mat(F.metal));
     dock.position.set(-fw*0.12, 0.12, fl/2 + 0.01);
     grp.add(dock);
 
     // 侧窗条
-    if(!this._geo.facWin) this._geo.facWin = new THREE.BoxGeometry(0.18, 0.08, 0.03);
     const winMat = this._basicMat(F.window);
     const w1 = new THREE.Mesh(this._geo.facWin, winMat);
     w1.position.set(fw*0.15, bh*0.72, fl/2 + 0.01);

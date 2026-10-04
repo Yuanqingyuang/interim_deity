@@ -107,9 +107,16 @@ for(let era=0; era<5; era++){
       assert(grp && grp.isGroup !== false, `era${era+1} zone${zone} varn${variant} 返回 Group`);
       const meshes = grp.children.filter(o=>o.isMesh);
       assert(meshes.length > 0, `era${era+1} zone${zone} varn${variant} 至少 1 个 Mesh（实际 ${meshes.length}）`);
-      // 几何必须全部有定义（undefined 会在真实渲染时报错）
+      // 几何必须**命中 _geo 共享缓存中的某个键**。
+      // 注意：不能只断言 `!!m.geometry` —— three 的 Mesh 构造对未定义几何有默认参数
+      // （geometry = new BufferGeometry()），因此 `new THREE.Mesh(undefined, mat)` 不会报错，
+      // 而是静默产生一个空几何；那样测试会全绿却漏掉构件不可见。2026-10 审计正是这样
+      // 漏过了 17 个惰性创建的几何键（导致 E1 窑口 / E2-E3 作坊烟道等永久不可见）。
+      const geoPool = new Set(Object.values(R._geo));
       for(const m of meshes){
         assert(!!m.geometry, `era${era+1} zone${zone} varn${variant} 的 Mesh 几何已定义`);
+        assert(geoPool.has(m.geometry),
+          `era${era+1} zone${zone} varn${variant} 的几何来自 _geo 缓存（非空几何默认值）`);
         assert(m.material !== undefined, `era${era+1} zone${zone} varn${variant} 的 Mesh 材质已定义`);
       }
       // 坐标与缩放不得为 NaN（NaN 会污染实例矩阵、整批渲染异常）
