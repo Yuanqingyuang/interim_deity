@@ -537,15 +537,11 @@ function countAdjRes(G, x, y){
 
 // ---- 工业专用：按 numeric-design §8 生成 ----
 
-function chunkOf(x,y){
-  return { cx: Math.floor(x/LAYOUT.CHUNK), cy: Math.floor(y/LAYOUT.CHUNK) };
-}
-
 function chunkStats(G, cx, cy){
-  const x0 = cx*LAYOUT.CHUNK, y0 = cy*LAYOUT.CHUNK;
+  const x0 = cx*CHUNK, y0 = cy*CHUNK;
   let total=0, by={1:0,2:0,3:0,4:0};
-  for(let ly=0; ly<LAYOUT.CHUNK; ly++)
-    for(let lx=0; lx<LAYOUT.CHUNK; lx++){
+  for(let ly=0; ly<CHUNK; ly++)
+    for(let lx=0; lx<CHUNK; lx++){
       const t = getTile(G, x0+lx, y0+ly);
       if(t && t.zone>0){ total++; by[t.zone]++; }
     }
@@ -583,7 +579,7 @@ function scoreIndustrialCell(G, x, y, resList, indList, otherList){
   const R = LAYOUT.R_ind;
   if(dR < R) return -1e9;
 
-  const {cx,cy} = chunkOf(x,y);
+  const {cx,cy} = worldToChunk(x,y);
   const st = chunkStats(G, cx, cy);
   if(st.total >= LAYOUT.BlockCap) return -1e9;
 

@@ -36,16 +36,15 @@ export const NUM = {
 
 // 建筑布局参数（numeric-design §8.6）
 export const LAYOUT = {
-  R_farm: 3,
   R_ind: 6,          // 工业距居住最小切比雪夫距离
   D_max: 8,          // 异类簇最大中心距
-  D_chunk_max: 1,
   BlockCap: 25,      // 单区块建筑容量
-  CHUNK: 10,
-  gap_min: 1,
-  gap_farm: 0,
   // P2-B（2026-10 决策：以代码为准）：原 batch={1:9,2:9,3:2,4:1} 为死值（全库零引用），已删除。
   // 批次方阵不实施；工业 2 格配对由 AUTO.industryPerTick 承担，见 numeric-design §8 实现差异注。
+  // 2026-10 校准：CHUNK/R_farm/D_chunk_max/gap_min/gap_farm 同为全库零引用死值，已删除。
+  // 区块尺寸统一取 config.js 的 CHUNK（此前 terrain.js 用 LAYOUT.CHUNK、state.js 用 config.CHUNK，
+  // 两处定义分裂在两条路径上，任一处改动都会造成区块尺寸理解不一致的静默错位）。
+  // 间隔规则（gap_min/gap_farm）实际由 terrain.js canPlaceZoneAt 的硬编码 8 邻域判定实现。
   // 打分权重
   w1: 3.0, w2: 2.0, w3: 1.5, w4: 2.5, w5: 2.0,
 };
@@ -59,11 +58,29 @@ export function buildingHigh(E, zone){
   return Math.ceil(T[E] * NUM.R_B[zone] * NUM.K);
 }
 
-// N_cap：E1–2 住房，E3–4 粮食，E5 产能
-export function popCap(E, houses, farms, industries){
-  if(E <= 1) return houses * NUM.C_HOUSE;
-  if(E <= 3) return Math.floor(farms * NUM.C_FARM / NUM.R_FOOD);
-  return Math.floor(industries * NUM.K_IND / NUM.R_INDPOP);
+/**
+ * 奇迹「人口容量」乘区：金字塔 +20%、摩天塔 +50%（config.js WONDERS[1]/[3] 的 bonus 文案）。
+ * 单一来源 —— state.housingCap（autoBuild 压力判断）与 tick 的人口上限都必须经此计算，
+ * 否则会出现「UI 与 HUD 承诺加成、实际人口上限拿不到」的口径分叉（2026-10 修复的回归即属此类）。
+ */
+export function wonderPopMult(wonders){
+  if(!wonders) return 1;
+  let m = 1;
+  if(wonders[1]) m *= 1.2;
+  if(wonders[3]) m *= 1.5;
+  return m;
+}
+
+/**
+ * N_cap：E1–2 住房，E3–4 粮食，E5 产能；再乘奇迹人口容量乘区。
+ * @param wonders 可选；未传时视为无奇迹（保持纯公式语义，便于测试与文档对照）
+ */
+export function popCap(E, houses, farms, industries, wonders){
+  let cap;
+  if(E <= 1) cap = houses * NUM.C_HOUSE;
+  else if(E <= 3) cap = Math.floor(farms * NUM.C_FARM / NUM.R_FOOD);
+  else cap = Math.floor(industries * NUM.K_IND / NUM.R_INDPOP);
+  return cap * wonderPopMult(wonders);
 }
 
 export function foodPerSec(farms){ return farms * NUM.C_FARM; }

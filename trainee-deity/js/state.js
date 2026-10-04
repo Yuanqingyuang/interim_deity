@@ -1,6 +1,6 @@
 // 实习神明 · GameState（无边界稀疏区块）
 import { MINH, MAXH, DAY_LENGTH, CHUNK, START_CHUNKS, ERAS, faithCapOf } from './config.js';
-import { NUM } from './formulas.js';
+import { NUM, wonderPopMult } from './formulas.js';
 import { logInit, logEncode, logDecode } from './log.js';
 
 export function makeTile(){
@@ -128,10 +128,9 @@ export function invalidateBuiltCache(G){
 }
 
 export function housingCap(G){
-  let cap = countBuilt(G,1) * NUM.C_HOUSE;
-  if(G.wonders[1]) cap *= 1.2;
-  if(G.wonders[3]) cap *= 1.5;
-  return cap;
+  // 乘区统一走 formulas.wonderPopMult，禁止在此另写一份（2026-10 回归教训：
+  // 两份实现分叉 → UI 承诺 +20%/+50%、实际人口上限拿不到）
+  return countBuilt(G,1) * NUM.C_HOUSE * wonderPopMult(G.wonders);
 }
 
 export function foodCap(G){

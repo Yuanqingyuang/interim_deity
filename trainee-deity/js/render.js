@@ -135,6 +135,7 @@ export class Renderer {
     this._bldM1 = new THREE.Matrix4();
     this._bldM2 = new THREE.Matrix4();
     this._bldSigA = null; this._bldSigB = null; this._bldKept = -1;
+    this._bldEra = -1;         // 槽位批次当前所属时代（_ensureBldBatches 守卫用）
     this.terrainDirty = true;
     this._npcHomes = [];
     this._npcHomesDirty = true;
@@ -1181,6 +1182,7 @@ export class Renderer {
     }
     this._bldInst = null; this._bldTpl = null; this._bldSlotIdx = null;
     this._bldSigA = null; this._bldSigB = null; this._bldKept = -1;
+    this._bldEra = -1;   // 使 _ensureBldBatches 的 era 守卫在下次调用时重建
   }
 
   /** 收集当前时代全部 12 个 (type×varn) 建筑模板：用伪格跑一次 makeBuilding，
@@ -1188,7 +1190,14 @@ export class Renderer {
    *  几何全部来自 _geo 共享缓存、材质来自 _matCache 池，模板壳无 GPU 资源。
    *  再按 (几何,材质,阴影属性) 聚合全局槽位，容量 = 单栋该槽位最大部件数 × MAX_BUILD_MESH。 */
   _ensureBldBatches(era){
-    if(this._bldInst) return this._bldInst;
+    // 槽位几何/材质按时代取色，故批次与 era 绑定。正常路径由 applyEraVisuals 调 _clearBldInst
+    // 整批重建；此处再显式校验一次 era，避免将来新增「换时代/换世界」路径漏调 applyEraVisuals 时，
+    // 静默沿用旧时代材质（隐式耦合 → 显式守卫）。
+    if(this._bldInst){
+      if(this._bldEra === era) return this._bldInst;
+      this._clearBldInst();
+    }
+    this._bldEra = era;
     const tpl = new Map();
     for(const [type, zone] of [['farm',2],['house',1],['church',4],['factory',3]]){
       for(let varn=0; varn<3; varn++){
@@ -1400,7 +1409,10 @@ export class Renderer {
             this.buildingGroup.remove(m);
             this.buildingMeshes.delete(key);
           }
-          if(step === 1 || (idx % step === 0)) this._bldCand.push(t);
+          // 与建造中分支同口径的三条保留条件：step==1、抽样命中、或「本来就已可见」。
+          // 缺第三条会让 step>1 的大城里，先前可见的在建建筑完工瞬间被永久移出画面
+          // （完工即消失；2026-10 修复）。
+          if(step === 1 || (idx % step === 0) || this.buildingMeshes.has(key)) this._bldCand.push(t);
         } else {
           const show = step === 1 || (idx % step === 0) || this.buildingMeshes.has(key);
           if(show){

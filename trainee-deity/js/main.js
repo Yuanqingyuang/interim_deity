@@ -679,7 +679,9 @@ function tick(dt){
   const regen = powerRegenOf(G.faithRate);
   G.power = Math.min(powerMaxOf(G.era), G.power + regen*dt);
 
-  const cap = F.popCap(E, houses, farms, inds);
+  // 奇迹「人口容量+20%/+50%」必须作用于实际增长上限：不能只进 autoBuild 压力判断（housingCap），
+  // 否则 WONDERS 的 bonus 文案与顶部/进阶条承诺都不兑现（2026-10 修复的回归）。
+  const cap = F.popCap(E, houses, farms, inds, G.wonders);
   let nextPop = F.growPop(G.pop, cap, E, farms, dt);
   if(G.boostGrow>0) nextPop = Math.min(cap, G.pop + (nextPop-G.pop)*2 + 0.6*dt);
   G.pop = Math.max(1, nextPop);
@@ -1179,6 +1181,17 @@ window.addEventListener('beforeunload', ()=>{
     if(Saves.writeSave(userKey, 'quick', ()=>serializeState(G), {})) _lastSaveOk = Date.now();
     else console.warn('[save] 离场保存失败');
   }catch(e){ console.warn('[save] 离场保存异常', e); }
+});
+// · pagehide 与 beforeunload 同走同步写档：移动端（尤其 iOS Safari）在「切到后台后被系统回收」
+//   与 bfcache 往返场景下不保证触发 beforeunload，只触发 pagehide，此前会静默丢档。
+//   同一 EXIT_SAVE_MIN_MS 节流窗口兜底，两者相邻触发时第二次直接跳过，不会重复全量序列化。
+window.addEventListener('pagehide', ()=>{
+  if(!(G.started && userKey && !G.over)) return;
+  if(Date.now() - _lastSaveOk < EXIT_SAVE_MIN_MS) return;
+  try{
+    if(Saves.writeSave(userKey, 'quick', ()=>serializeState(G), {})) _lastSaveOk = Date.now();
+    else console.warn('[save] pagehide 保存失败');
+  }catch(e){ console.warn('[save] pagehide 保存异常', e); }
 });
 let _bgSaveBusy = false;
 document.addEventListener('visibilitychange', ()=>{
