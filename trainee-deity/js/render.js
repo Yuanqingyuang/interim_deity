@@ -65,8 +65,7 @@ export class Renderer {
     this.sun.position.set(40, 50, 30);
     this.sun.castShadow = true;
     this.sun.shadow.mapSize.set(1024, 1024);
-    this._shadowR = 30;                 // 阴影正交框半径（随城区尺寸更新）
-    this._focus = { x: c, z: c };       // 阴影/日照焦点 = 城区中心
+    // _shadowR / _focus 已在 _initState 初始化（此处不再重复赋值）
     const s = this._shadowR;
     this.sun.shadow.camera.left=-s; this.sun.shadow.camera.right=s;
     this.sun.shadow.camera.top=s; this.sun.shadow.camera.bottom=-s;
@@ -147,6 +146,11 @@ export class Renderer {
     this.terrainMesh = null;
     this.waterMesh = null;
     this.hoverMesh = null;
+    // 阴影正交框半径与阴影/日照焦点：被 _syncShadow 与 updateDayLight 使用，
+    // 必须在 _initState 内初始化 —— 否则任何「只走 _initState 再 buildTerrain」的
+    // 路径会在 _syncShadow 里对 undefined 赋值而抛 TypeError（2026-10 审计发现）。
+    this._shadowR = 30;
+    this._focus = { x: 0, z: 0 };
     // P2-A 植被合批：区块内树不再逐棵建 Group，而是按部件合入 5 个 InstancedMesh 批次
     this._treeCand = [];       // 每帧收集的候选树格（复用数组，避免逐帧分配）
     this._treeInst = null;     // {trunk,cone,mid,ico,bush} 批次缓存（时代切换时重建）
@@ -291,7 +295,6 @@ export class Renderer {
     this._ndc = new THREE.Vector2();
     this._hit = new THREE.Vector3();
     this._plane = new THREE.Plane(new THREE.Vector3(0,1,0), 0);
-    this._builtCount = {1:0,2:0,3:0,4:0};
   }
 
   _mat(color, opts){
@@ -442,8 +445,9 @@ export class Renderer {
 
   updateClouds(t, dayK){
     if(!this.cloudMesh) return;
-    const c = 0;
-    this.cloudMesh.position.set(c + Math.sin(t*0.02)*6, 34, c + Math.cos(t*0.015)*4);
+    // 跟随城区焦点（原实现硬编码 c=0：城市远离原点时云会"飞走"）
+    const fx = this._focus?.x || 0, fz = this._focus?.z || 0;
+    this.cloudMesh.position.set(fx + Math.sin(t*0.02)*6, 34, fz + Math.cos(t*0.015)*4);
     if(this.cloudTex) this.cloudTex.offset.set((t*0.004)%1, (t*0.002)%1);
     this.cloudMesh.material.opacity = 0.25 + dayK*0.4;
     // MeshBasicMaterial 不吃光照：必须手动按昼夜着色，否则入夜后云仍是纯白
@@ -488,17 +492,6 @@ export class Renderer {
     this.scene.add(this.hoverMesh);
   }
 
-  // ---- 管理区角点高度 ----
-  _cornerH(G, gx, gy){
-    let sum=0, n=0;
-    for(let dy=0; dy<=1; dy++)
-      for(let dx=0; dx<=1; dx++){
-        const t = getTile(G, gx-dx+1, gy-dy+1);
-        if(t){ sum += t.water ? WATER_Y : t.h; n++; }
-      }
-    return n ? sum/n : 0;
-  }
-
   _cornerAdjWater(G, gx, gy){
     for(let dy=0; dy<=1; dy++)
       for(let dx=0; dx<=1; dx++){
@@ -516,6 +509,14 @@ export class Renderer {
     this._shadowR = R;
     const cam = this.sun.shadow.camera;
     cam.left = -R; cam.right = R; cam.top = R; cam.bottom = -R;
+    // far/near 必须随 R 派生（2026-10 修复）：
+    // 太阳距焦点 ≤ 约 74（updateDayLight 以 R=55 环绕 + elev 下限），正交框远端再延伸 R，
+    // 故 R=120 时正午需要约 194 > 原先固定的 170 → 大城外围阴影被裁；
+    // near 固定 1 则会在 R 大时裁掉太阳侧外圈（约 110 以外）。
+    cam.far = Math.ceil(74 + R + 12);
+    cam.near = Math.max(0.5, 74 - R - 12);
+    // 大框下每 texel 覆盖更大，提高阴影分辨率以抑制锯齿（1024 → 2048）
+    this.sun.shadow.mapSize.setScalar(R > 70 ? 2048 : 1024);
     cam.updateProjectionMatrix();
   }
 
@@ -2477,13 +2478,26 @@ export class Renderer {
 
   render(){ this.renderer.render(this.scene, this.camera); }
   resize(){
-    this.camera.aspect = window.innerWidth/window.innerHeight;
+    // 0/NaN 尺寸防护：部分浏览器在隐藏标签页或初始布局前会给出 0，除零会污染投影矩阵
+    const w = Math.max(1, window.innerWidth || 1);
+    const h = Math.max(1, window.innerHeight || 1);
+    this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
-    this.renderer.setSize(window.innerWidth, window.innerHeight);
+    // 跨屏/缩放后 devicePixelRatio 会变，原实现只在构造器设一次 → 分辨率不更新
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5));
+    this.renderer.setSize(w, h);
   }
 
   _bindCameraKeys(canvas){
+    // 在输入控件里打字时不得拦截（原实现无条件 preventDefault，
+    // 导致登录框 authUser/authPw 里输入 w/a/s/d/q/e 被吞、且相机同时被平移）
+    const inEditable = (el)=>{
+      if(!el) return false;
+      const tag = (el.tagName || '').toLowerCase();
+      return tag === 'input' || tag === 'textarea' || tag === 'select' || el.isContentEditable === true;
+    };
     const setKey = (e, down)=>{
+      if(inEditable(document.activeElement)) return;
       const k = e.key?.toLowerCase();
       if(!k) return;
       const map = { w:'w', a:'a', s:'s', d:'d', q:'q', e:'e' };
@@ -2494,9 +2508,17 @@ export class Renderer {
       }
       if(k === 'shift') this._keys.shift = down;
     };
-    window.addEventListener('keydown', (e)=>setKey(e, true));
-    window.addEventListener('keyup', (e)=>setKey(e, false));
-    window.addEventListener('blur', ()=>{
+    // 全部监听以具名 handler 注册并记录在 _keyBindings，
+    // 使 dispose() 能真正解绑（原实现用匿名箭头函数注册，dispose 里的
+    // this._unbindCameraKeys?.() 因方法不存在而永远 no-op，监听永不解除）。
+    this._keyBindings = this._keyBindings || [];
+    const on = (target, type, fn, opt)=>{
+      target.addEventListener(type, fn, opt);
+      this._keyBindings.push([target, type, fn, opt]);
+    };
+    on(window, 'keydown', (e)=>setKey(e, true));
+    on(window, 'keyup', (e)=>setKey(e, false));
+    on(window, 'blur', ()=>{
       this._keys = { w:false, a:false, s:false, d:false, q:false, e:false, shift:false };
     });
     // Shift + 右键 = 平移（OrbitControls 用 RIGHT=PAN 临时切换）
@@ -2504,13 +2526,13 @@ export class Renderer {
     const applyRight = ()=>{
       this.controls.mouseButtons.RIGHT = THREE.MOUSE.ROTATE;
     };
-    canvas.addEventListener('pointerdown', (e)=>{
+    on(canvas, 'pointerdown', (e)=>{
       if(e.button === 2 && e.shiftKey){
         shiftRmb = true;
         this.controls.mouseButtons.RIGHT = THREE.MOUSE.PAN;
       }
     });
-    window.addEventListener('pointerup', (e)=>{
+    on(window, 'pointerup', (e)=>{
       if(shiftRmb && e.button === 2){
         shiftRmb = false;
         applyRight();
@@ -2635,13 +2657,22 @@ export class Renderer {
     // 3) 本类独占的贴图与画布
     this._waveTex?.dispose(); this._waveTex = null;
     this.skyTex?.dispose();   this.skyTex = null;
+    this.cloudTex?.dispose(); this.cloudTex = null;   // 原实现漏了云层贴图
     this._skyCanvas = null;
     // 4) 共享池整池释放
     for(const g of geoPool) g.dispose();
     this._geo = {};
     this.purgeMaterials(true);
     // 5) 渲染器本体与事件
-    this._unbindCameraKeys?.();
+    // 原实现调 this._unbindCameraKeys?.()，但**该方法在整仓不存在** → 永远 no-op，
+    // 于是 _bindCameraKeys 注册的 window/canvas 监听永不解除（2026-10 审计发现）。
+    // 这里显式解绑：_bindCameraKeys 内以具名 handler 注册并记录在 _keyBindings。
+    if(this._keyBindings){
+      for(const [target, type, fn, opt] of this._keyBindings){
+        try{ target.removeEventListener(type, fn, opt); }catch{}
+      }
+      this._keyBindings = null;
+    }
     this.controls?.dispose?.();
     this.renderer?.dispose?.();
     this.buildingMeshes.clear();
