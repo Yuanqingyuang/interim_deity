@@ -346,7 +346,34 @@ for(const zone of [1,2,3,4]){
   assert(R3._matCache.size === 1, '在用材质被保留');
 }
 
-// ---- 11) 每类分区在每个时代都必须产出网格（防止分派遗漏导致"空地"）----
+// ---- 15) 朝向一致性：构建器写出的朝向必须与槽位合批复算的 _bldRot 完全一致 ----
+// 背景（2026-10 审计）：_syncBuildBatches 只复算了 house/factory，且 factory 一律按
+// 锯厂房 0.06 复算；形体分派给教堂与土窑/作坊/反应堆的随机朝向全未被复算 →
+// 完工瞬间朝向跳变。本项把「构建器 ↔ 合批」的一致性锁死。
+{
+  let bad = 0;
+  const detail = [];
+  for(let era=0; era<5; era++){
+    for(const zone of [1,2,3,4]){
+      for(let v=0; v<3; v++){
+        const t = { zone, variant:v, _wx:7, _wy:1.2, _wz:-3, built:true, prog:1 };
+        const grp = R.makeBuilding(t, era);
+        const expect = R._bldRot(t, era, zone);
+        if(Math.abs(grp.rotation.y - expect) > 1e-12){
+          bad++;
+          detail.push(`era${era+1} zone${zone} varn${v}: 构建 ${grp.rotation.y.toFixed(4)} vs 合批 ${expect.toFixed(4)}`);
+        }
+      }
+    }
+  }
+  assert(bad === 0, `60 组「时代×分区×变体」的构建器朝向与 _bldRot 完全一致${bad ? '（不一致 ' + bad + ' 组：' + detail.slice(0,3).join('; ') + '）' : ''}`);
+
+  // 朝向不得溢出到「不该旋转」的分区：农田构建器不设朝向，故必须恒为 0
+  for(let era=0; era<5; era++){
+    const t = { zone:2, variant:0, _wx:3, _wy:1.2, _wz:5, built:true, prog:1 };
+    assert(R.makeBuilding(t, era).rotation.y === 0, `E${era+1} 农田朝向为 0（构建器未设朝向）`);
+  }
+}
 for(let era=0; era<5; era++){
   for(const zone of [1,2,3,4]){
     for(let variant=0; variant<3; variant++){

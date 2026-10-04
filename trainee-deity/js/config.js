@@ -193,6 +193,22 @@ export function formForEra(era){
   return BUILDING_STYLE[i].form || { body:'box', roof:'pyramid', cluster:0 };
 }
 
+/**
+ * 各时代建筑朝向的**幅度表**（2026-10 新增）。
+ * 必须由「构建器」与「槽位合批」共用同一个纯函数计算，否则完工瞬间朝向会跳变 ——
+ * 审计发现 `_syncBuildBatches` 只复算了 house/factory，而形体分派给教堂/土窑/作坊/
+ * 反应堆的随机朝向全部未被复算（教堂 0.5/0.14/0.10、土窑 0.6、作坊/反应堆 0.10），
+ * 且 factory 统一按锯厂房 0.06 复算，对作坊/反应堆同样错。
+ * 约定：数组下标为 era，未列出的时代回落到最后一项。
+ */
+export const BLD_ROT = {
+  house:  [0.10],
+  church: [0.50, 0.14, 0.10, 0.10, 0.10],   // 巨石阵 / 柱廊神庙 / 哥特 / 新古典 / 悬浮光环
+};
+
+/** E1 土窑 / E2-E3 作坊 / E5 反应堆 的朝向幅度（E4 锯厂房另见 factoryFormAmp） */
+export const FACTORY_ROT = { kiln: 0.60, workshop: 0.10, reactor: 0.10 };
+
 // 信仰区：现实教堂色调（奶油石墙 + 深石板尖顶 + 金饰）
 export const CHURCH_STYLE = {
   wall: 0xf3ece1,

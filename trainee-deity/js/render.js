@@ -7,7 +7,7 @@ import {
   TILE, WATER_LEVEL, WILD, FOG_NEAR, FOG_FAR,
   PALETTES, BUILDING_STYLE, ZONES, FOLKCOL, FOLK_HEAD,
   CHURCH_STYLE, FACTORY_STYLE, CHUNK, FARM_CROP, FARM_SOIL, churchStyleForEra, factoryStyleForEra,
-  formForEra,
+  formForEra, BLD_ROT, FACTORY_ROT,
   sampleSun, lerpHex, hash2, mulberry32, MAX_BUILD_MESH, MAX_TREE_MESH, MAX_NPC_INST
 } from './config.js';
 import { cornerColor, heightAt, riverMask, sampleHeight } from './terrain.js';
@@ -109,13 +109,18 @@ export class Renderer {
     this._keys = { w:false, a:false, s:false, d:false, q:false, e:false, shift:false };
     this._bindCameraKeys(canvas);
 
-    // 场景挂载（容器与 terrainMesh/waterMesh/hoverMesh 已在 _initState 建好，这里只挂到 scene 上）
+    // 场景挂载（容器已在 _initState 建好，这里只挂到 scene 上）
     this.scene.add(this.buildingGroup);
     this.scene.add(this.treeGroup);
     this.scene.add(this.npcGroup);
     this.scene.add(this.particleGroup);
     this.scene.add(this.wonderGroup);
     this.scene.add(this.decoGroup);
+    // 悬停高亮环：必须在 scene 与 _geo 就绪后创建。
+    // 2026-10 审计发现 makeHover 此前**全仓零调用**，而 setHover 无条件解引用
+    // this.hoverMesh（_initState 里置 null）→ 开始游戏后首次鼠标移动即 TypeError，
+    // 且悬停环永不显示。
+    this.makeHover();
   }
 
   /**
@@ -927,6 +932,35 @@ export class Renderer {
   }
 
   // 居住区：民宅 — 主屋 + 偏屋 + 坡顶 + 门窗 + 前廊
+  /**
+   * 建筑朝向（弧度）：**构建器与槽位合批必须共用本函数**，否则完工瞬间朝向跳变。
+   * 2026-10 审计发现 _syncBuildBatches 只复算了 house/factory，且 factory 一律按锯厂房
+   * 0.06 复算 —— 而形体分派给教堂（0.5/0.14/0.10）与土窑(0.6)/作坊/反应堆(0.10) 的
+   * 随机朝向全部未被复算，完工瞬间会跳变。
+   * house 沿用原表达式以保持既有观感与既有存档一致；church 按时代取 BLD_ROT.church。
+   */
+  _bldRot(t, era, zone){
+    const e = Math.max(0, Math.min(4, era|0));
+    const h = ()=> hash2(t._wx|0, t._wz|0, t.variant) - 0.5;
+    // 农田（zone 2）的构建器不设朝向，故恒为 0 —— 与 _makeFarm 精确对应
+    if(zone === 2) return 0;
+    // 教堂（zone 4）：按该时代的实际形态取幅度（E1 巨石阵 0.5 / E2 神庙 0.14 /
+    // E3 哥特 0.10 / E4 新古典 0.10 / E5 悬浮光环 0.10）
+    if(zone === 4) return h() * BLD_ROT.church[Math.min(e, BLD_ROT.church.length - 1)];
+    // 工业（zone 3）：按该时代的实际形态取幅度（E1 土窑 0.6 / E2-E3 作坊 0.10 /
+    // E4 锯厂房 0.06 / E5 反应堆 0.10）
+    if(zone === 3){
+      const form = factoryStyleForEra(e).form;
+      const a = form === 'kiln' ? FACTORY_ROT.kiln
+              : form === 'workshop' ? FACTORY_ROT.workshop
+              : form === 'reactor' ? FACTORY_ROT.reactor
+              : 0.06;
+      return h() * a;
+    }
+    // 住房（zone 1）：各时代统一 0.10，与 _makeHouse 一致
+    return h() * BLD_ROT.house[0];
+  }
+
   // 居住区民宅：按 BUILDING_STYLE[era].form 选择形体（2026-10，见 时代建筑外观规划.md）。
   // 形体差异是「剪影级」的——远看即可分辨时代，而配色仍由 style 决定（本轮不改配色）。
   // 关键约束：所有几何一律取自 _geo 共享缓存、材质取自 _matCache，禁止在此 new THREE.*，
@@ -945,7 +979,7 @@ export class Renderer {
       roof: this._mat(style.roof),
       trim: this._mat(lerpHex(style.wall, 0xffffff, 0.25)),
     };
-    grp.rotation.y = (hash2(t._wx|0, t._wz|0, t.variant) - 0.5) * 0.10;
+    grp.rotation.y = this._bldRot(t, era, 1);
 
     const add = (geoKey, mat, scale, pos, rotY = 0, shadow = true)=>{
       const m = new THREE.Mesh(this._geo[geoKey], mat);
@@ -1182,7 +1216,7 @@ export class Renderer {
     altar.castShadow = true; altar.receiveShadow = true;
     grp.add(altar);
 
-    grp.rotation.y = (hash2(t._wx|0, t._wz|0, t.variant) - 0.5) * 0.5;
+    grp.rotation.y = this._bldRot(t, era, 4);
     grp.position.set(t._wx, 0, t._wz);
     return grp;
   }
@@ -1234,7 +1268,7 @@ export class Renderer {
       grp.add(ped);
     }
 
-    grp.rotation.y = (hash2(t._wx|0, t._wz|0, t.variant) - 0.5) * 0.14;
+    grp.rotation.y = this._bldRot(t, era, 4);
     grp.position.set(t._wx, 0, t._wz);
     return grp;
   }
@@ -1290,7 +1324,7 @@ export class Renderer {
     face.position.set(0, h*1.55, -d*0.18 + 0.13);
     grp.add(face);
 
-    grp.rotation.y = (hash2(t._wx|0, t._wz|0, t.variant) - 0.5) * 0.10;
+    grp.rotation.y = this._bldRot(t, era, 4);
     grp.position.set(t._wx, 0, t._wz);
     return grp;
   }
@@ -1337,7 +1371,7 @@ export class Renderer {
       grp.add(band);
     }
 
-    grp.rotation.y = (hash2(t._wx|0, t._wz|0, t.variant) - 0.5) * 0.10;
+    grp.rotation.y = this._bldRot(t, era, 4);
     grp.position.set(t._wx, 0, t._wz);
     return grp;
   }
@@ -1438,6 +1472,7 @@ export class Renderer {
       grp.add(w2);
     }
 
+    grp.rotation.y = this._bldRot(t, era, 4);
     grp.position.set(t._wx, 0, t._wz);
     return grp;
   }
@@ -1489,7 +1524,7 @@ export class Renderer {
       grp.add(log);
     }
 
-    grp.rotation.y = (hash2(t._wx|0, t._wz|0, t.variant) - 0.5) * 0.6;
+    grp.rotation.y = this._bldRot(t, era, 3);
     grp.position.set(t._wx, 0, t._wz);
     return grp;
   }
@@ -1552,7 +1587,7 @@ export class Renderer {
       grp.add(wheel);
     }
 
-    grp.rotation.y = (hash2(t._wx|0, t._wz|0, t.variant) - 0.5) * 0.10;
+    grp.rotation.y = this._bldRot(t, era, 3);
     grp.position.set(t._wx, 0, t._wz);
     return grp;
   }
@@ -1595,7 +1630,7 @@ export class Renderer {
     stack.position.y = rh + 0.17;
     grp.add(stack);
 
-    grp.rotation.y = (hash2(t._wx|0, t._wz|0, t.variant) - 0.5) * 0.10;
+    grp.rotation.y = this._bldRot(t, era, 3);
     grp.position.set(t._wx, 0, t._wz);
     return grp;
   }
@@ -1665,7 +1700,7 @@ export class Renderer {
     w2.position.set(-fw*0.15, bh*0.72, fl/2 + 0.01);
     grp.add(w2);
 
-    grp.rotation.y = (hash2(t._wx|0, t._wz|0, t.variant) - 0.5) * 0.06;
+    grp.rotation.y = this._bldRot(t, era, 3);
     grp.position.set(t._wx, 0, t._wz);
     return grp;
   }
@@ -1861,9 +1896,9 @@ export class Renderer {
       const parts = this._bldTpl.get(`${type}|${t.variant % 3}`);
       if(!parts) continue;
       // 整栋矩阵：世界位置（底面埋入地表 0.02）+ 与 makeBuilding 一致的随机朝向
-      let rot = 0;
-      if(type === 'house') rot = (hash2(t._wx|0, t._wz|0, t.variant) - 0.5) * 0.10;
-      else if(type === 'factory') rot = (hash2(t._wx|0, t._wz|0, t.variant) - 0.5) * 0.06;
+      // 与构建器共用同一纯函数 —— 此前只复算 house/factory 且 factory 幅度写死 0.06，
+      // 导致教堂与土窑/作坊/反应堆完工瞬间朝向跳变（2026-10 审计）
+      const rot = this._bldRot(t, G.era, t.zone);
       d.position.set(t._wx, t._wy - 0.02, t._wz);
       d.rotation.y = rot;
       d.updateMatrix();
@@ -1989,6 +2024,10 @@ export class Renderer {
         // P3-A：完工建筑（缩放恒为 1、朝向可由哈希复算）走槽位实例批次，
         // 与建筑总数脱钩；建造中建筑需要逐栋进度缩放，仍保留独立网格（同屏仅数栋）。
         if(t.built){
+          // 顺序很关键：必须先记录「本来就已可见」，再释放独立网格。
+          // 若先 delete 再 has(key)，第三项保留条件恒为 false（死条件），
+          // step>1 的大城里刚完工且未命中抽样的建筑会永久消失（2026-10 审计发现）。
+          const wasVisible = this.buildingMeshes.has(key);
           const m = this.buildingMeshes.get(key);
           if(m){
             // 建造中→完工：释放独立网格（几何全部来自 _geo 共享缓存，无需 dispose）
@@ -1996,9 +2035,7 @@ export class Renderer {
             this.buildingMeshes.delete(key);
           }
           // 与建造中分支同口径的三条保留条件：step==1、抽样命中、或「本来就已可见」。
-          // 缺第三条会让 step>1 的大城里，先前可见的在建建筑完工瞬间被永久移出画面
-          // （完工即消失；2026-10 修复）。
-          if(step === 1 || (idx % step === 0) || this.buildingMeshes.has(key)) this._bldCand.push(t);
+          if(step === 1 || (idx % step === 0) || wasVisible) this._bldCand.push(t);
         } else {
           const show = step === 1 || (idx % step === 0) || this.buildingMeshes.has(key);
           if(show){
@@ -2377,6 +2414,9 @@ export class Renderer {
 
   // #24 style: 'ok' 可放置（金）| 'bad' 不可放置（红）| 'demolish' 可拆除（橙）| 'none' 隐藏
   setHover(x, y, G, style){
+    // 防御：hoverMesh 由 makeHover() 创建；缺失时静默跳过而不是每次鼠标移动都抛异常
+    // （2026-10 审计：makeHover 曾零调用，导致 setHover 无条件解引用 null）
+    if(!this.hoverMesh) return;
     if(x==null || style === 'none'){ this.hoverMesh.visible=false; return; }
     const t = getTile(G, x, y);
     if(!t){ this.hoverMesh.visible=false; return; }
