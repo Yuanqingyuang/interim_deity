@@ -7,6 +7,7 @@ import {
   TILE, WATER_LEVEL, WILD, FOG_NEAR, FOG_FAR,
   PALETTES, BUILDING_STYLE, ZONES, FOLKCOL, FOLK_HEAD,
   CHURCH_STYLE, FACTORY_STYLE, CHUNK, FARM_CROP, FARM_SOIL, churchStyleForEra, factoryStyleForEra,
+  formForEra,
   sampleSun, lerpHex, hash2, mulberry32, MAX_BUILD_MESH, MAX_TREE_MESH, MAX_NPC_INST
 } from './config.js';
 import { cornerColor, heightAt, riverMask, sampleHeight } from './terrain.js';
@@ -38,11 +39,8 @@ const NPC_LOCAL = {
 
 export class Renderer {
   constructor(canvas){
-    this.canvas = canvas;
+    this._initState(canvas);          // 纯字段 + 共享几何/材质池（可被测试单独复用）
     this.scene = new THREE.Scene();
-    this.era = 0;
-    this.dayTime = 0.35;
-    this.skyTex = null;
     this.scene.fog = new THREE.Fog(0xffeec8, FOG_NEAR, FOG_FAR);
 
     const c = 0;
@@ -119,6 +117,21 @@ export class Renderer {
     this.particleGroup = new THREE.Group(); this.scene.add(this.particleGroup);
     this.wonderGroup = new THREE.Group(); this.scene.add(this.wonderGroup);
     this.decoGroup = new THREE.Group(); this.scene.add(this.decoGroup);
+    this.terrainDirty = true;
+  }
+
+  /**
+   * 纯字段初始化 + 共享几何/材质池（2026-10 从 constructor 拆出）。
+   * 拆出的理由：构造器里的 WebGLRenderer / OrbitControls / 场景光照都需要真实 WebGL 与 DOM，
+   * 而**几何与材质池是建筑构建器的全部依赖**。拆出后 test/rev-1-builders.test.mjs 可以
+   * 用 Object.create(Renderer.prototype) + _initState(canvas) 得到与线上完全一致的
+   * _geo / _matCache，对 makeBuilding 做构建期冒烟（而非在测试里手抄一份初始化，那样会漂移）。
+   */
+  _initState(canvas){
+    this.canvas = canvas;
+    this.era = 0;
+    this.dayTime = 0.35;
+    this.skyTex = null;
     this.buildingMeshes = new Map();
     this.wonderMeshes = new Map();
     // P2-A 植被合批：区块内树不再逐棵建 Group，而是按部件合入 5 个 InstancedMesh 批次
@@ -147,10 +160,7 @@ export class Renderer {
     this._npcPivot = new THREE.Object3D();   // 髋/肩 pivot（位置 + 摆动 rotation.x）
     this._npcM1 = new THREE.Matrix4();
     this._npcM2 = new THREE.Matrix4();
-
     this._buildGeo();
-    this._buildSkyTexture(0, this.dayTime);
-    this.makeHover();
   }
 
   _buildGeo(){
@@ -183,6 +193,37 @@ export class Renderer {
       field: new THREE.BoxGeometry(0.74, 0.06, 0.74),
       eave: new THREE.BoxGeometry(0.78, 0.06, 0.78),
       lintelDoor: new THREE.BoxGeometry(0.24, 0.05, 0.05),
+      // ---- 民宅构件（2026-10 重构：原为 _makeHouse 内懒创建，改形体分派后集中到此，
+      //      保证 _geo 在构造期即完整——否则 _houseBox/_houseRound 会取到 undefined 几何）----
+      pad: new THREE.BoxGeometry(1, 0.04, 1),
+      houseBody: new THREE.BoxGeometry(1, 1, 1),
+      wingRoof: new THREE.BoxGeometry(1, 1, 1),
+      step: new THREE.BoxGeometry(0.28, 0.06, 0.10),
+      sill: new THREE.BoxGeometry(0.14, 0.02, 0.03),
+      thatch: new THREE.ConeGeometry(0.34, 0.24, 4),
+      smallSpire: new THREE.ConeGeometry(0.08, 0.28, 5),
+      // ---- 时代形体几何（2026-10 新增，见 时代建筑外观规划.md）----
+      // 与既有几何同一约定：全部进 _geo 共享缓存，_make* 内不得再 new THREE.*，
+      // 否则会被逐栋创建、破坏 P3 槽位合批的 (几何,材质,阴影) 聚合前提。
+      padRound: new THREE.CylinderGeometry(0.5, 0.52, 0.04, 10),   // 圆形地基（蛮荒）
+      bodyCyl: new THREE.CylinderGeometry(0.34, 0.40, 1, 8),       // 上窄下宽的圆筒墙体
+      coneRoof: new THREE.ConeGeometry(0.48, 0.42, 10),            // 圆锥草顶（蛮荒）
+      gableRoof: new THREE.ConeGeometry(0.52, 0.34, 4),            // 人字坡顶（城邦，压扁四棱锥）
+      steepRoof: new THREE.ConeGeometry(0.46, 0.72, 4),            // 陡峭尖顶（封建）
+      kilnDome: new THREE.SphereGeometry(0.30, 8, 6, 0, Math.PI*2, 0, Math.PI/2), // 土窑穹体
+      kilnHole: new THREE.CylinderGeometry(0.05, 0.06, 0.10, 6),   // 窑顶烟孔
+      sawTooth: new THREE.ConeGeometry(0.16, 0.14, 3),             // 锯齿屋顶单元
+      silo: new THREE.CylinderGeometry(0.10, 0.10, 0.30, 8),       // 筒仓
+      siloCone: new THREE.ConeGeometry(0.11, 0.09, 8),             // 筒仓锥顶
+      domeBig: new THREE.SphereGeometry(0.30, 10, 6, 0, Math.PI*2, 0, Math.PI/2), // 星际大穹顶
+      domeSmall: new THREE.SphereGeometry(0.16, 8, 5, 0, Math.PI*2, 0, Math.PI/2),// 副穹顶（多体聚落）
+      glowRing: new THREE.CylinderGeometry(0.30, 0.30, 0.035, 12), // 发光环带
+      glowBand: new THREE.BoxGeometry(0.05, 0.34, 0.05),           // 竖向光带
+      spireTall: new THREE.ConeGeometry(0.20, 0.66, 4),            // 哥特尖塔
+      buttress: new THREE.BoxGeometry(0.06, 0.30, 0.16),           // 飞扶壁薄板
+      towerSquare: new THREE.BoxGeometry(0.24, 1, 0.24),           // 方钟楼（工业时代）
+      column: new THREE.CylinderGeometry(0.05, 0.05, 0.34, 6),     // 柱廊圆柱（城邦）
+      pediment: new THREE.ConeGeometry(0.26, 0.12, 4),             // 三角楣（城邦）
     };
     this._matCache = new Map();
     this._wildHeights = null;
@@ -774,124 +815,159 @@ export class Renderer {
   }
 
   // 居住区：民宅 — 主屋 + 偏屋 + 坡顶 + 门窗 + 前廊
+  // 居住区民宅：按 BUILDING_STYLE[era].form 选择形体（2026-10，见 时代建筑外观规划.md）。
+  // 形体差异是「剪影级」的——远看即可分辨时代，而配色仍由 style 决定（本轮不改配色）。
+  // 关键约束：所有几何一律取自 _geo 共享缓存、材质取自 _matCache，禁止在此 new THREE.*，
+  // 否则会被逐栋创建，破坏 P3 槽位合批的 (几何,材质,阴影) 聚合前提。
   _makeHouse(t, era){
     const style = BUILDING_STYLE[era] || BUILDING_STYLE[0];
+    const form = formForEra(era);
     const grp = new THREE.Group();
     const varn = t.variant % 3;
     const bh = Math.max(0.78, style.h * (0.90 + varn*0.08));
     const fp = 0.70;
-    const wallMat = this._mat(style.wall);
-    const sideMat = this._mat(style.side);
-    const roofMat = this._mat(style.roof);
-    const trimMat = this._mat(lerpHex(style.wall, 0xffffff, 0.25));
+    // 三型共享的四个材质（_mat 带缓存，重复取用无成本）
+    const c = {
+      wall: this._mat(style.wall),
+      side: this._mat(style.side),
+      roof: this._mat(style.roof),
+      trim: this._mat(lerpHex(style.wall, 0xffffff, 0.25)),
+    };
     grp.rotation.y = (hash2(t._wx|0, t._wz|0, t.variant) - 0.5) * 0.10;
 
-    if(!this._geo.pad) this._geo.pad = new THREE.BoxGeometry(1, 0.04, 1);
-    const pad = new THREE.Mesh(this._geo.pad, sideMat);
-    pad.scale.set(fp*1.18, 1, fp*1.18);
-    pad.position.y = 0.02;
-    pad.receiveShadow = true;
-    grp.add(pad);
+    const add = (geoKey, mat, scale, pos, rotY = 0, shadow = true)=>{
+      const m = new THREE.Mesh(this._geo[geoKey], mat);
+      if(Array.isArray(scale)) m.scale.set(scale[0], scale[1], scale[2]);
+      else if(scale !== null) m.scale.setScalar(scale);
+      m.position.set(pos[0], pos[1], pos[2]);
+      if(rotY) m.rotation.y = rotY;
+      if(shadow){ m.castShadow = true; m.receiveShadow = true; }
+      grp.add(m);
+      return m;
+    };
 
-    if(!this._geo.houseBody) this._geo.houseBody = new THREE.BoxGeometry(1, 1, 1);
-    const body = new THREE.Mesh(this._geo.houseBody, wallMat);
-    body.scale.set(fp*0.72, bh, fp*0.86);
-    body.position.set(-fp*0.06, bh/2, 0);
-    body.castShadow = true; body.receiveShadow = true;
-    grp.add(body);
+    if(form.body === 'cyl')            this._houseRound(grp, c, { bh, fp, varn, era, style, add });
+    else if(form.body === 'longhouse') this._houseLonghouse(grp, c, { bh, fp, varn, era, style, add });
+    else                               this._houseBox(grp, c, { bh, fp, varn, era, style, add, form });
 
-    const wingH = bh * (0.55 + varn*0.08);
-    const wing = new THREE.Mesh(this._geo.houseBody, sideMat);
-    wing.scale.set(fp*0.42, wingH, fp*0.55);
-    wing.position.set(fp*0.28, wingH/2, -fp*0.08);
-    wing.castShadow = true; wing.receiveShadow = true;
-    grp.add(wing);
+    this._houseCommon(grp, c, { bh, fp, varn, era, style, add, form });
 
-    if(!this._geo.wingRoof) this._geo.wingRoof = new THREE.BoxGeometry(1, 1, 1);
-    const wingRoof = new THREE.Mesh(this._geo.wingRoof, roofMat);
-    wingRoof.scale.set(fp*0.48, 0.06, fp*0.60);
-    wingRoof.position.set(fp*0.28, wingH + 0.03, -fp*0.08);
-    wingRoof.castShadow = true;
-    grp.add(wingRoof);
+    grp.position.set(t._wx, 0, t._wz);
+    return grp;
+  }
 
-    const eave = new THREE.Mesh(this._geo.eave, roofMat);
-    eave.scale.set(fp*0.82/0.78, 1, fp*0.96/0.78);
-    eave.position.set(-fp*0.06, bh - 0.015, 0);
-    eave.castShadow = true;
-    grp.add(eave);
-
-    const roof = new THREE.Mesh(this._geo.roof, roofMat);
-    roof.position.set(-fp*0.06, bh + 0.22, 0);
-    roof.rotation.y = Math.PI/4;
-    roof.scale.set(fp*0.95/0.52, 0.88 + varn*0.08, fp*1.05/0.52);
-    roof.castShadow = true;
-    grp.add(roof);
-
-    if(style.deco === 'thatch'){
-      if(!this._geo.thatch) this._geo.thatch = new THREE.ConeGeometry(0.34, 0.24, 4);
-      const thatch = new THREE.Mesh(this._geo.thatch, this._mat(style.decoCol));
-      thatch.position.set(-fp*0.06, bh + 0.20, 0);
-      thatch.rotation.y = Math.PI/4;
-      thatch.scale.setScalar(fp/0.72);
-      thatch.castShadow = true;
-      grp.add(thatch);
-    }
-
+  /** 民宅配件：门/台阶/门楣/窗/窗台/烟囱 —— 与形体无关，三型共用 */
+  _houseCommon(grp, c, { bh, fp, varn, era, style, add, form }){
     const doorZ = fp*0.44;
-    if(!this._geo.step) this._geo.step = new THREE.BoxGeometry(0.28, 0.06, 0.10);
-    const step = new THREE.Mesh(this._geo.step, sideMat);
-    step.position.set(-fp*0.06, 0.05, doorZ + 0.04);
-    grp.add(step);
-
-    const door = new THREE.Mesh(this._geo.door, sideMat);
-    door.position.set(-fp*0.06, 0.16, doorZ);
-    door.scale.set(fp/0.72 * 0.9, 1.05, 1);
-    grp.add(door);
-    const lintel = new THREE.Mesh(this._geo.lintelDoor, trimMat);
-    lintel.position.set(-fp*0.06, 0.34, doorZ);
-    grp.add(lintel);
+    add('step', c.side, null, [-fp*0.06, 0.05, doorZ + 0.04], 0, false);
+    const door = add('door', c.side, [fp/0.72*0.9, 1.05, 1], [-fp*0.06, 0.16, doorZ], 0, false);
+    door.receiveShadow = false;
+    add('lintelDoor', c.trim, null, [-fp*0.06, 0.34, doorZ], 0, false);
 
     const winMat = this._basicMat(style.window || 0xffe08c);
     const winY = Math.min(bh*0.58, Math.max(0.38, bh*0.50));
     for(const wx of [-fp*0.28, fp*0.12]){
-      const w = new THREE.Mesh(this._geo.window, winMat);
-      w.position.set(wx, winY, fp*0.42);
-      grp.add(w);
-      if(!this._geo.sill) this._geo.sill = new THREE.BoxGeometry(0.14, 0.02, 0.03);
-      const sill = new THREE.Mesh(this._geo.sill, trimMat);
-      sill.position.set(wx, winY - 0.08, fp*0.43);
-      grp.add(sill);
+      add('window', winMat, null, [wx, winY, fp*0.42], 0, false);
+      add('sill', c.trim, null, [wx, winY - 0.08, fp*0.43], 0, false);
     }
-    const wingWin = new THREE.Mesh(this._geo.window, winMat);
-    wingWin.position.set(fp*0.28, wingH*0.55, fp*0.20);
-    grp.add(wingWin);
 
+    // 烟囱：1 号变体不加（保持轮廓变化）；圆筒屋用细烟管，方屋用砖烟囱
     if(varn !== 0 && bh > 0.8){
-      const chim = new THREE.Mesh(this._geo.chimney, sideMat);
-      chim.position.set(fp*0.18, bh + 0.22, -fp*0.16);
-      chim.castShadow = true;
-      grp.add(chim);
+      const chim = add('chimney', c.side, null, [fp*0.18, bh + 0.22, -fp*0.16]);
+      chim.receiveShadow = false;
+    }
+    // 竖向光带（星际）：贴在墙体侧面的自发光条
+    if((form.extras || []).includes('glowBand') && style.glow){
+      const gm = this._basicMat(style.glow);
+      for(const gx of [-fp*0.40, fp*0.40]){
+        add('glowBand', gm, [1, bh/bh, 1], [gx, bh*0.55, -fp*0.10], 0, false);
+      }
+    }
+  }
+
+  /** E1 蛮荒：圆形地基 + 上窄下宽圆筒墙 + 圆锥草顶 —— 与方屋形成「圆 vs 方」的年代分界 */
+  _houseRound(grp, c, { bh, fp, varn, era, style, add }){
+    add('padRound', c.side, [fp*1.30, 1, fp*1.30], [0, 0.02, 0], 0, false).receiveShadow = true;
+
+    const body = add('bodyCyl', c.wall, [fp*1.02, bh, fp*1.02], [0, bh/2, 0]);
+    body.receiveShadow = true;
+
+    // 草顶：圆锥 + 屋檐挑出（比墙体宽，形成明显草棚剪影）
+    add('coneRoof', c.roof, [fp*1.55, 1, fp*1.55], [0, bh + 0.19, 0]);
+    add('thatch', this._mat(style.decoCol), fp/0.72, [0, bh + 0.02, 0], Math.PI/4);
+    // 顶部草束（加高锥顶，强化"茅草"观感）
+    add('coneRoof', c.roof, [fp*0.55, 0.85, fp*0.55], [0, bh + 0.40, 0], 0.6);
+  }
+
+  /** E4 工业：低矮长屋 + 锯齿屋顶 + 筒仓 —— 厂房轮廓，与民居/教堂区分 */
+  _houseLonghouse(grp, c, { bh, fp, varn, era, style, add }){
+    const lw = fp*0.86, ll = fp*1.55, lh = bh*0.82;
+    add('pad', c.side, [lw*1.22, 1, ll*1.10], [0, 0.02, 0], 0, false).receiveShadow = true;
+
+    const body = add('houseBody', c.wall, [lw, lh, ll], [0, lh/2, 0]);
+    body.receiveShadow = true;
+    // 端部高体（厂房常见的错落体量）
+    add('houseBody', c.side, [lw*0.55, lh*1.35, ll*0.30], [-lw*0.35, lh*1.35/2, ll*0.42]);
+
+    // 锯齿屋顶：3 个三棱柱（ConeGeometry seg=3）沿长边排开 —— 工业时代的招牌剪影
+    for(let i=0;i<3;i++){
+      const zz = -ll*0.30 + ll*0.30*i;
+      add('sawTooth', c.roof, [lw/0.16, 1, ll*0.30/0.14], [0, lh + 0.07, zz]);
+      add('sawGlass', this._basicMat(style.window || 0xffe08c), null, [lw*0.30, lh + 0.09, zz], 0, false);
+    }
+    // 筒仓（2 个，一高一矮）
+    for(const [sx, sh] of [[lw*0.52, 1.15], [-lw*0.52, 0.85]]){
+      add('silo', c.side, [1, sh, 1], [sx, sh*0.15, -ll*0.30]);
+      add('siloCone', c.roof, [1, sh, 1], [sx, sh*0.15 + 0.15, -ll*0.30]);
+    }
+  }
+
+  /** E2/E3/E5 方体屋：主体 + 偏屋 + 坡顶/尖顶/穹顶，按 form.roof 选屋顶 */
+  _houseBox(grp, c, { bh, fp, varn, era, style, add, form }){
+    add('pad', c.side, [fp*1.18, 1, fp*1.18], [0, 0.02, 0], 0, false).receiveShadow = true;
+
+    const body = add('houseBody', c.wall, [fp*0.72, bh, fp*0.86], [-fp*0.06, bh/2, 0]);
+    body.receiveShadow = true;
+
+    const wingH = bh * (0.55 + varn*0.08);
+    const wing = add('houseBody', c.side, [fp*0.42, wingH, fp*0.55], [fp*0.28, wingH/2, -fp*0.08]);
+    wing.receiveShadow = true;
+    add('wingRoof', c.roof, [fp*0.48, 0.06, fp*0.60], [fp*0.28, wingH + 0.03, -fp*0.08]);
+    add('eave', c.roof, [fp*0.82/0.78, 1, fp*0.96/0.78], [-fp*0.06, bh - 0.015, 0]);
+    add('window', this._basicMat(style.window || 0xffe08c), null, [fp*0.28, wingH*0.55, fp*0.20], 0, false);
+
+    const roof = form?.roof || 'pyramid';
+    if(roof === 'dome'){
+      // E5 星际：大穹顶 + 发光环带（主穹顶在 _houseCluster 里补副穹顶）
+      add('glowRing', this._basicMat(style.glow || 0x40a8cc), [fp*1.30, 1, fp*1.30], [-fp*0.06, bh + 0.01, 0], 0, false);
+      add('domeBig', this._mat(style.roof), [fp*1.05, 0.92, fp*1.25], [-fp*0.06, bh, 0]);
+    } else {
+      const key = roof === 'steep' ? 'steepRoof' : (roof === 'gable' ? 'gableRoof' : 'roof');
+      const hMul = roof === 'steep' ? 1.0 : (roof === 'gable' ? 1.0 : (0.88 + varn*0.08));
+      add(key, c.roof, [fp*0.95/0.52, hMul, fp*1.05/0.52], [-fp*0.06, bh + 0.22, 0], Math.PI/4);
+      // 陡尖顶额外加一枚小尖塔（封建时代的竖向特征）
+      if(roof === 'steep') add('smallSpire', c.roof, null, [-fp*0.06, bh + 0.62, 0]);
     }
 
-    if((style.deco === 'spire' || style.deco === 'pitched') && varn===2){
-      if(!this._geo.smallSpire) this._geo.smallSpire = new THREE.ConeGeometry(0.08, 0.28, 5);
-      const tip = new THREE.Mesh(this._geo.smallSpire, roofMat);
-      tip.position.set(-fp*0.28, bh + 0.30, -fp*0.12);
-      tip.castShadow = true;
-      grp.add(tip);
+    // 柱廊（城邦）：正面两根圆柱 + 三角楣
+    if((form?.extras || []).includes('columns')){
+      for(const cx of [-fp*0.36, fp*0.24]){
+        add('column', c.trim, null, [cx, 0.17, fp*0.50], 0, false);
+      }
+      add('pediment', c.roof, [1, 1, 1], [-fp*0.06, 0.44, fp*0.50], Math.PI/4);
     }
-
-    if(style.deco === 'dome' && era >= 4){
-      if(!this._geo.dome) this._geo.dome = new THREE.SphereGeometry(0.26, 8, 6, 0, Math.PI*2, 0, Math.PI/2);
-      const dome = new THREE.Mesh(this._geo.dome, this._mat(style.glow, {
-        transparent:true, opacity: style.glowA ?? 0.55, roughness:0.25
-      }));
-      dome.position.set(-fp*0.06, bh + 0.02, 0);
-      grp.add(dome);
+    // 飞扶壁（封建）：两侧斜靠薄板
+    if((form?.extras || []).includes('buttress')){
+      for(const bx of [-1, 1]){
+        const b = add('buttress', c.side, null, [bx*fp*0.52, bh*0.34, -fp*0.06], 0);
+        b.rotation.z = bx * 0.28;
+      }
     }
-
-    grp.position.set(t._wx, 0, t._wz);
-    return grp;
+    // 筒仓（工业）
+    if((form?.extras || []).includes('silo')){
+      add('silo', c.side, [1, 1.1, 1], [fp*0.52, 0.17, -fp*0.36]);
+      add('siloCone', c.roof, [1, 1.1, 1], [fp*0.52, 0.32, -fp*0.36]);
+    }
   }
 
   // 信仰区：教堂 — 奶油石墙、深石板尖顶、尖塔十字、玫瑰窗

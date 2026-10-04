@@ -168,13 +168,30 @@ export const PALETTES = [
     sun:0xf0f4ff, fog:0xe8ecff, nightSky0:0x141830, nightSky1:0x202848, nightSky2:0x2c3458 },
 ];
 
+// 四类建筑的「时代形体」由 form 描述（2026-10 新增，见 时代建筑外观规划.md）。
+// 配色保持不变；form 只决定构件形状，使五个时代的**剪影**可辨：
+//   E1 圆筒+圆锥草顶  E2 方体+人字坡+柱廊  E3 陡尖顶+哥特尖塔  E4 锯齿屋顶+筒仓  E5 穹顶+发光环带
+// body : 'box' 方体（默认） | 'cyl' 上窄下宽圆筒 | 'longhouse' 低矮长屋 | 'reactor' 圆柱反应堆
+// roof : 'pyramid' 四棱锥（默认） | 'cone' 圆锥 | 'gable' 人字坡 | 'steep' 陡尖顶 | 'saw' 锯齿 | 'dome' 穹顶 | 'none' 无
+// cluster: 单格渲染的副体数（BUILD_Q 多体聚落，0 = 单栋）
 export const BUILDING_STYLE = [
-  { wall:0xd58b42, side:0x9f632c, roof:0xe5aa56, h:0.9, deco:'thatch',  decoCol:0xd49e4a },
-  { wall:0xe38b4a, side:0xb1652d, roof:0xf4ad63, h:1.2, deco:'pitched', decoCol:0x000000 },
-  { wall:0xd1cab9, side:0x9e9786, roof:0xcb411e, h:1.4, deco:'spire',   decoCol:0xcb411e, glow:0xffe48c, glowA:0.95 },
-  { wall:0x9da8ba, side:0x6d798e, roof:0x55616e, h:2.2, deco:'factory', decoCol:0x675644, window:0xffe08c, windowA:0.85 },
-  { wall:0x6ad1ec, side:0x2e9dc2, roof:0xf2fbff, h:1.7, deco:'dome',    decoCol:0xf2fbff, glow:0x40a8cc, glowA:0.55 },
+  { wall:0xd58b42, side:0x9f632c, roof:0xe5aa56, h:0.9, deco:'thatch',  decoCol:0xd49e4a,
+    form:{ body:'cyl',       roof:'cone',     cluster:0 } },   // E1 蛮荒：草棚
+  { wall:0xe38b4a, side:0xb1652d, roof:0xf4ad63, h:1.2, deco:'pitched', decoCol:0x000000,
+    form:{ body:'box',       roof:'gable',    cluster:0, extras:['columns'] } }, // E2 城邦：石砌方屋
+  { wall:0xd1cab9, side:0x9e9786, roof:0xcb411e, h:1.4, deco:'spire',   decoCol:0xcb411e, glow:0xffe48c, glowA:0.95,
+    form:{ body:'box',       roof:'steep',    cluster:0, extras:['buttress'] } }, // E3 封建：陡尖顶
+  { wall:0x9da8ba, side:0x6d798e, roof:0x55616e, h:2.2, deco:'factory', decoCol:0x675644, window:0xffe08c, windowA:0.85,
+    form:{ body:'longhouse', roof:'saw',      cluster:0, extras:['silo'] } },     // E4 工业：锯齿厂房
+  { wall:0x6ad1ec, side:0x2e9dc2, roof:0xf2fbff, h:1.7, deco:'dome',    decoCol:0xf2fbff, glow:0x40a8cc, glowA:0.55,
+    form:{ body:'box',       roof:'dome',     cluster:3, extras:['glowBand'] } }, // E5 星际：穹顶群
 ];
+
+/** 取某时代的形体描述（缺省回落到 E1 形态，避免旧存档/异常 era 下崩溃） */
+export function formForEra(era){
+  const i = Math.max(0, Math.min(BUILDING_STYLE.length - 1, era|0));
+  return BUILDING_STYLE[i].form || { body:'box', roof:'pyramid', cluster:0 };
+}
 
 // 信仰区：现实教堂色调（奶油石墙 + 深石板尖顶 + 金饰）
 export const CHURCH_STYLE = {
