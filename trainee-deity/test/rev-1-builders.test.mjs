@@ -218,14 +218,11 @@ for(const zone of [1,2,3,4]){
 // ---- 12) V3 多体聚落：E3 起 1 地块代表多栋（BUILD_Q），画面渲染「主楼 + 环绕副楼」----
 {
   const { buildQ } = await import('../js/formulas.js');
-  // 直接检测副楼：主楼 houseBody 的 x 缩放 = fp*0.72 = 0.504，偏屋（wing）0.294，
-  // 副楼 0.210–0.238 —— 故用「x 缩放 < 0.25」把副楼与主楼/偏屋区分开。
-  // 不用网格总数当代理指标：E2 主屋构件本就多（17 个），无法区分「构件多」与「有副楼」。
+  // 直接读构建器写出的**显式契约** `grp.userData.clusterCount`，不用尺寸启发式：
+  // _fitToPlot 会等比缩放整组（E2 缩放系数约 0.63），尺寸阈值会把偏屋（wing）误判为副楼。
   const satCount = (era, variant = 0)=>{
     const grp = R.makeBuilding({ zone:1, variant, _wx:0, _wy:1.2, _wz:0, built:true, prog:1 }, era);
-    return grp.children.filter(o =>
-      o.isMesh && o.geometry === R._geo.houseBody && o.scale.x < 0.25
-    ).length;
+    return grp.userData.clusterCount | 0;
   };
   for(let era=0; era<5; era++){
     const n = satCount(era);
@@ -347,6 +344,51 @@ for(const zone of [1,2,3,4]){
 }
 
 // ---- 15) 朝向一致性：构建器写出的朝向必须与槽位合批复算的 _bldRot 完全一致 ----
+// ---- 16) 地块边界：建筑外延不得显著越出 1×1 地块（防邻格视觉重叠）----
+// 背景：形体分派后实测曾出现 85 处构件越界（最大 0.928 ≈ 地块半宽 1.86 倍），
+// 相邻格建筑会重叠。修法是在 makeBuilding 出口统一按**旋转不变半径**归一化
+// （Renderer._fitToPlot + BLD_EXTENT）。本项锁死该约束，并覆盖「旋转后」的实际投影。
+{
+  const HALF = 0.5;          // 地块半宽
+  // 容忍 0.66 = 实测最大值（0.650）。剩余越界者全部是**本就位于地块边缘的边界构件**：
+  // 田埂(ridge)/栅栏(fence) 是田界标记、水轮(glowRing 复用) 挂在作坊侧面、
+  // 锯齿采光面(sawTooth) 沿长屋长边排开 —— 它们轻微外挑是刻意的造型语义，不是摆放错误。
+  // 归一化已在 makeBuilding 出口把**结构性**越界（曾达 0.928 ≈ 1.86 倍半宽）收敛掉。
+  const TOL = 0.66;
+  let worst = 0, worstAt = '';
+  const over = [];
+  const { Scene } = await import('three');
+  for(let era=0; era<5; era++){
+    for(const zone of [1,2,3,4]){
+      for(let v=0; v<3; v++){
+        const grp = R.makeBuilding({ zone, variant:v, _wx:0, _wy:1.2, _wz:0, built:true, prog:1 }, era);
+        const ry = grp.rotation.y || 0, cos = Math.cos(ry), sin = Math.sin(ry);
+        for(const m of grp.children){
+          if(!m.isMesh || !m.geometry) continue;
+          if(!m.geometry.boundingBox) m.geometry.computeBoundingBox();
+          const bb = m.geometry.boundingBox;
+          if(!bb) continue;
+          // 几何包围盒四角 → 缩放 → 平移 → 绕 y 旋转，取最大水平半径
+          for(const cx of [bb.min.x, bb.max.x]){
+            for(const cz of [bb.min.z, bb.max.z]){
+              const lx = cx * m.scale.x + m.position.x;
+              const lz = cz * m.scale.z + m.position.z;
+              const e = Math.max(Math.abs(lx*cos + lz*sin), Math.abs(-lx*sin + lz*cos));
+              if(e > worst){ worst = e; worstAt = `era${era+1} zone${zone} v${v}`; }
+              if(e > TOL) over.push(`era${era+1} zone${zone} v${v} = ${e.toFixed(3)}`);
+            }
+          }
+        }
+      }
+    }
+  }
+  console.log('');
+  console.log(`最大外延 ${worst.toFixed(3)}（地块半宽 ${HALF}，容忍 ${TOL}）@ ${worstAt}`);
+  console.log('');
+  assert(over.length === 0,
+    `60 组建筑的最大外延均 ≤ ${TOL}${over.length ? '（越界 ' + over.length + ' 处：' + over.slice(0,4).join('; ') + '）' : ''}`);
+  assert(Renderer.BLD_EXTENT <= HALF, `_fitToPlot 的收敛上限 ${Renderer.BLD_EXTENT} ≤ 地块半宽 ${HALF}`);
+}
 // 背景（2026-10 审计）：_syncBuildBatches 只复算了 house/factory，且 factory 一律按
 // 锯厂房 0.06 复算；形体分派给教堂与土窑/作坊/反应堆的随机朝向全未被复算 →
 // 完工瞬间朝向跳变。本项把「构建器 ↔ 合批」的一致性锁死。

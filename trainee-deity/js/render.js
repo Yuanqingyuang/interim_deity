@@ -844,12 +844,57 @@ export class Renderer {
   }
 
   // ---- 建筑：三区独立建模，互不复用 ----
+  /**
+   * 单格建筑的可视外延上限（世界单位）。地块为 1×1、中心在原点，
+   * 故正常情况下任何构件的外延应 ≲0.5。留 0.48 余量以吸收朝向旋转带来的角点外扩
+   * （旋转后的包围盒对角可比边长大约 √2，但构件本身不是满格方块，实测 0.48 足够）。
+   */
+  static BLD_EXTENT = 0.46;
+
+  /**
+   * 把整组等比缩放到外延上限之内（2026-10 新增）。
+   * 形体分派后实测曾出现 85 处构件越界（最大 0.928 ≈ 地块半宽的 1.86 倍），
+   * 相邻格建筑会视觉重叠。逐处调参既易漏、新增形体时又会复发，
+   * 故改为在出口按**实际包围盒**统一收敛：新增任何形体都自动受约束。
+   * 注意：此处量的是未旋转的局部外延；旋转前后的半径上界一致，故判断有效。
+   */
+  _fitToPlot(grp){
+    const limit = Renderer.BLD_EXTENT;
+    let maxE = 0;
+    for(const m of grp.children){
+      if(!m.isMesh || !m.geometry) continue;
+      if(!m.geometry.boundingBox) m.geometry.computeBoundingBox();
+      const bb = m.geometry.boundingBox;
+      if(!bb) continue;
+      // 用**旋转不变半径** √(x²+z²)：构件的几何角点取到「缩放+平移」后的水平半径上界，
+      // 任何绕 y 的旋转都不会超过它。首版用 max(|x|,|z|) 会低估自身带旋转的构件
+      // （田埂 rot.y=90°、发光环 rot.z=90° 等），实测仍越界 44 处。
+      let r2 = 0;
+      for(const cx of [bb.min.x, bb.max.x]){
+        for(const cz of [bb.min.z, bb.max.z]){
+          const lx = Math.abs(cx * m.scale.x + m.position.x);
+          const lz = Math.abs(cz * m.scale.z + m.position.z);
+          const d = lx*lx + lz*lz;
+          if(d > r2) r2 = d;
+        }
+      }
+      const e = Math.sqrt(r2);
+      if(e > maxE) maxE = e;
+    }
+    if(maxE > limit){
+      const k = limit / maxE;
+      for(const m of grp.children) if(m.isMesh) m.scale.multiplyScalar(k);
+    }
+    return grp;
+  }
+
   makeBuilding(t, era){
     const z = ZONES[t.zone];
-    if(z.noBuilding) return this._makeFarm(t, era);
-    if(t.zone === 4) return this._makeChurch(t, era);
-    if(t.zone === 3) return this._makeFactory(t, era);
-    return this._makeHouse(t, era);
+    const grp = z.noBuilding ? this._makeFarm(t, era)
+      : t.zone === 4 ? this._makeChurch(t, era)
+      : t.zone === 3 ? this._makeFactory(t, era)
+      : this._makeHouse(t, era);
+    return grp ? this._fitToPlot(grp) : grp;
   }
 
   // 农田：按时代形体分派（2026-10，见 时代建筑外观规划.md）
@@ -1013,6 +1058,10 @@ export class Renderer {
    * 位置取 ±0.30 的有限偏移（不超过地块内切一半），避免与邻格建筑视觉重叠。
    */
   _houseCluster(grp, c, { bh, fp, varn, era, style }){
+    // userData.clusterCount 是**显式契约**：0 = 单栋（BUILD_Q=1 的时代），≥2 = 多体聚落。
+    // 测试直接读它，不再用「尺寸阈值」启发式识别副楼 —— 归一化会等比缩放整组，
+    // 使偏屋(wings)也落进尺寸阈值而造成误判。
+    grp.userData.clusterCount = 0;
     const q = buildQ(era);
     if(q <= 1) return;                                   // E1/E2：1 格 = 1 栋，不补副楼
     // 副楼数量随 BUILD_Q 与变体变化（2–3 个）：BUILD_Q 越大，聚落越成片
@@ -1047,6 +1096,7 @@ export class Renderer {
       if(rk === 'gableRoof') rf.rotation.y = Math.PI/4;
       rf.castShadow = true;
       grp.add(rf);
+      grp.userData.clusterCount += 1;
     }
   }
 
@@ -1518,11 +1568,14 @@ export class Renderer {
     grp.add(mouth);
 
     // 柴堆（两段横木，强化"蛮荒工业"语义）
+    // 注意：_geo.fence 是 0.7 宽的构件，复用为柴堆时必须缩小并放在地块内侧，
+    // 否则半宽 0.35 叠加位移会外伸出 0.5 的地块半宽（实测曾达 0.718）。
     for(let i=0;i<2;i++){
-      const log = new THREE.Mesh(this._geo.fence, this._mat(F.brick));
-      log.position.set(r*1.35, 0.06 + i*0.07, -r*0.5);
-      log.rotation.y = 0.35 + i*0.3;
-      grp.add(log);
+      const lg = new THREE.Mesh(this._geo.fence, this._mat(F.brick));
+      lg.scale.set(0.45, 1, 0.9);
+      lg.position.set(r*0.72, 0.06 + i*0.07, -r*0.78);
+      lg.rotation.y = 0.35 + i*0.3;
+      grp.add(lg);
     }
 
     grp.rotation.y = this._bldRot(t, era, 3);
