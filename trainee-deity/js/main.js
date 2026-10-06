@@ -11,6 +11,9 @@ import * as Sfx from './audio.js';
 // 进度逻辑（eraReady / 里程碑 / 进阶状态迁移）抽到纯模块，使其可被 Node 单元测试覆盖。
 // main.js 顶层会 boot() 并注册 window 监听，Node 无法 import，故这些逻辑原先零覆盖。
 import { eraReadiness, eraReady as eraReadyOf, claimMilestones, milestoneSummary as milestoneSummaryOf, applyEraAdvance } from './progression.js';
+// 存档策略（是否该写、节流、互斥）抽到纯模块，使其可被 Node 单元测试覆盖 ——
+// 这三条路径原先写死在事件回调里，而 main.js 顶层会 boot()，Node 无法 import。
+import { isSaveBusy, autosaveTick, exitSaveTick, bgSaveTick } from './savepolicy.js';
 import { Renderer } from './render.js';
 import { UI } from './ui.js';
 import * as Auth from './auth.js';
@@ -453,14 +456,20 @@ function startGame(){
 let _autosaveAcc = 0;
 let _autosaveWarned = false;
 let _autosaveBusy = false;
+// 转后台异步写的忙标志：tryAutosave 的忙判据也要计入它，故在此声明
+let _bgSaveBusy = false;
 // AUTOSAVE_SEC 已收口至 config.js（A-02）
 // #2 存档卡死：自动存档改走异步分块路径，不再在 tick 里同步 stringify/setItem 卡帧
 function tryAutosave(dt){
-  if(!G.started || G.over || !userKey) return;
-  if(_autosaveBusy || _saving) return;
-  _autosaveAcc += dt;
-  if(_autosaveAcc < AUTOSAVE_SEC) return;
-  _autosaveAcc = 0;
+  // 决策在 js/savepolicy.js（纯逻辑、可单测）。忙判据统一为 isSaveBusy ——
+  // 原先此处只查 _autosaveBusy/_saving，与 visibilitychange 的检查项不一致。
+  const d = autosaveTick({
+    acc: _autosaveAcc, dt, intervalSec: AUTOSAVE_SEC,
+    busy: isSaveBusy({ autosaveBusy: _autosaveBusy, saving: _saving, bgSaveBusy: _bgSaveBusy }),
+    started: G.started, over: G.over, hasUser: !!userKey,
+  });
+  _autosaveAcc = d.acc;                 // 因忙跳过时保留累加，下帧再试（不被白白吞掉）
+  if(!d.due) return;
   _autosaveBusy = true;
   // 写档失败返回 null，必须检查：静默失败会让玩家以为一直在自动存档
   Saves.writeSaveAsync(
@@ -1172,30 +1181,32 @@ window.addEventListener('contextmenu', e=>e.preventDefault());
 //   同步写会 bump 槽位序号，使在飞的异步写自动放弃提交（最新者获胜），无需互斥。
 // · visibilitychange(hidden) 改走异步分块写：页面转后台后通常仍存活足够时间完成分块写档，
 //   不再阻塞渲染线程；若随后真卸载，beforeunload 的同步写会以更高序号接管。
-window.addEventListener('beforeunload', ()=>{
-  if(!(G.started && userKey && !G.over)) return;
-  if(Date.now() - _lastSaveOk < EXIT_SAVE_MIN_MS) return;
+/** 离场保存（beforeunload 与 pagehide 共用）：节流与前置条件在 savepolicy.js */
+function saveOnExit(tag){
+  const d = exitSaveTick({
+    lastSaveOk: _lastSaveOk, now: Date.now(), minIntervalMs: EXIT_SAVE_MIN_MS,
+    started: G.started, over: G.over, hasUser: !!userKey,
+  });
+  if(!d.run) return;
   try{
     if(Saves.writeSave(userKey, 'quick', ()=>serializeState(G), {})) _lastSaveOk = Date.now();
-    else console.warn('[save] 离场保存失败');
-  }catch(e){ console.warn('[save] 离场保存异常', e); }
-});
+    else console.warn(`[save] ${tag} 保存失败`);
+  }catch(e){ console.warn(`[save] ${tag} 保存异常`, e); }
+}
+window.addEventListener('beforeunload', ()=>saveOnExit('离场'));
 // · pagehide 与 beforeunload 同走同步写档：移动端（尤其 iOS Safari）在「切到后台后被系统回收」
 //   与 bfcache 往返场景下不保证触发 beforeunload，只触发 pagehide，此前会静默丢档。
 //   同一 EXIT_SAVE_MIN_MS 节流窗口兜底，两者相邻触发时第二次直接跳过，不会重复全量序列化。
-window.addEventListener('pagehide', ()=>{
-  if(!(G.started && userKey && !G.over)) return;
-  if(Date.now() - _lastSaveOk < EXIT_SAVE_MIN_MS) return;
-  try{
-    if(Saves.writeSave(userKey, 'quick', ()=>serializeState(G), {})) _lastSaveOk = Date.now();
-    else console.warn('[save] pagehide 保存失败');
-  }catch(e){ console.warn('[save] pagehide 保存异常', e); }
-});
-let _bgSaveBusy = false;
+window.addEventListener('pagehide', ()=>saveOnExit('pagehide'));
 document.addEventListener('visibilitychange', ()=>{
   if(document.visibilityState !== 'hidden') return;
-  if(!(G.started && userKey && !G.over)) return;
-  if(_saving || _bgSaveBusy) return;
+  // 原实现只查 _saving || _bgSaveBusy，**漏查 _autosaveBusy** ——
+  // 自动存档在飞时切后台会并发两份全量序列化（审计 2026-10 发现）。
+  const d = bgSaveTick({
+    busy: isSaveBusy({ autosaveBusy: _autosaveBusy, saving: _saving, bgSaveBusy: _bgSaveBusy }),
+    started: G.started, over: G.over, hasUser: !!userKey,
+  });
+  if(!d.run) return;
   _bgSaveBusy = true;
   Saves.writeSaveAsync(
     userKey, 'quick',
