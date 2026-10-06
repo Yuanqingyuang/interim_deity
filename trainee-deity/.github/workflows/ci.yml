@@ -38,20 +38,22 @@ jobs:
         run: npm --prefix test/browser install
       - name: 下载 Chromium（与 playwright-core 1.63.0 同版本注册表）
         run: npx --yes playwright@1.63.0 install --with-deps chromium
-      - name: 启动静态服务（仓库根目录 :8080）
+      # 静态服务必须从**游戏根目录**起（index.html 在 trainee-deity/），
+      # 从仓库根起会让 /index.html 返回 404；旧版用 `curl -sf ... && echo` 探测，
+      # 探测失败不影响 job 结论，于是浏览器回归长期静默跳过。
+      # test/support/serve.mjs 自带「根下必须有 index.html」的前置校验，缺了会直接失败。
+      - name: 启动静态服务（游戏根目录 :8080）
         run: |
-          python3 -m http.server 8080 &
-          sleep 2
-          curl -sf http://localhost:8080/index.html >/dev/null && echo "server up"
-      - name: 运行浏览器回归
+          node test/support/serve.mjs 8080 &
+          for i in $(seq 1 20); do
+            if curl -sf http://127.0.0.1:8080/index.html >/dev/null; then echo "server up"; exit 0; fi
+            sleep 0.5
+          done
+          echo "::error::静态服务未就绪（index.html 不可达）"; exit 1
+      - name: 运行浏览器回归（7 个测试）
         env:
           TD_OUT: ${{ runner.temp }}/td-browser-out
-        run: |
-          node test/browser/game-test.mjs
-          node test/browser/security-test.mjs
-          node test/browser/leak-test.mjs
-          node test/browser/boot-timing.mjs
-          node test/browser/unload-test.mjs
+        run: node test/support/run-browser.mjs
       - name: 上传测试产物（截图 / 结果 JSON）
         if: always()
         uses: actions/upload-artifact@v4

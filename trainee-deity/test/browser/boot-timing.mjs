@@ -106,3 +106,31 @@ try {
 
 fs.writeFileSync(path.join(OUT, 'boot-results.json'), JSON.stringify(out, null, 2));
 await browser.close();
+
+// ── 门禁（2026-10 新增）──
+// 原实现只打印 navMs / longTasks / 慢资源，从不判定，于是永远退出 0。
+// 阈值刻意宽松：本测试在软件渲染（SwiftShader）与 CI 低配机上跑，绝对值会漂移，
+// 故只拦截「数量级异常」——例如某次改动让启动退化数倍、或渲染循环根本没跑起来。
+{
+  const fails = [];
+  const gate = (ok, msg)=>{ console.log((ok ? 'PASS  ' : 'FAIL  ') + '[启动] ' + msg); if(!ok) fails.push(msg); };
+  gate(!out.error, '流程无异常' + (out.error ? '（' + out.error + '）' : ''));
+  const runs = out.runs || [];
+  gate(runs.length === 2, '两个场景都跑完（实测 ' + runs.length + '/2）');
+  for(const r of runs){
+    const tag = r.tag || '?';
+    gate(r.selOk !== false, tag + '：启动后出现了预期界面');
+    gate(!r.err, tag + '：未出现页面内采集错误');
+    // boot 必须在 8s 内让界面可见（本机实测约 0.9s；CI 放宽 8 倍余量）
+    gate(typeof r.navMs === 'number' && r.navMs < 8000, tag + '：navMs=' + r.navMs + ' < 8000');
+    // DCL 与 loaderHidden 打点必须存在（说明 JS 真的执行到了 boot）
+    const dcl = r.marks?.find(m => m.n === 'DCL' || m.n === 'DCL(already)')?.at;
+    gate(typeof dcl === 'number', tag + '：DCL 打点存在（' + dcl + '）');
+    const hidden = r.marks?.find(m => m.n === 'loaderHidden')?.at;
+    gate(typeof hidden === 'number' && hidden < 8000, tag + '：loader 在 8s 内隐藏（' + hidden + '）');
+    // longTask 总量不得异常（实测约 0.5–1.1s；>6s 说明主线程被长期阻塞）
+    gate(r.longTaskTotalMs < 6000, tag + '：longTask 总量 ' + r.longTaskTotalMs + 'ms < 6000');
+  }
+  if(fails.length){ console.log('\n启动计时 FAIL：' + fails.length + ' 项未通过'); process.exit(1); }
+  console.log('\n启动计时 PASS');
+}

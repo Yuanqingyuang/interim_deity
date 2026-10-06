@@ -7,8 +7,8 @@
     "lint": "node test/support/lint.mjs",
     "verify": "node test/support/lint.mjs && node test/support/run-all.mjs",
     "shim": "node test/support/ensure-three-shim.mjs",
-    "serve": "python -m http.server 8080",
-    "serve:test": "python -m http.server 8765",
-    "test:browser": "npm --prefix test/browser install && node test/browser/game-test.mjs && node test/browser/security-test.mjs && node test/browser/leak-test.mjs && node test/browser/boot-timing.mjs && node test/browser/unload-test.mjs"
+    "serve": "node test/support/serve.mjs 8080",
+    "serve:test": "node test/support/serve.mjs 8765",
+    "test:browser": "npm --prefix test/browser install && node test/support/run-browser.mjs"
   }
 }

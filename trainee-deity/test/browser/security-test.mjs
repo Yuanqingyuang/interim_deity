@@ -150,3 +150,20 @@ async function waitBoot(page, ms = 40000) {
 function PW_() { return 'pw12345678'; }
 fs.writeFileSync(path.join(OUT, 'security-results.json'), JSON.stringify(out, null, 2));
 await browser.close();
+
+// ── 门禁（2026-10 新增）──
+// 原实现把 xssFired / injectedImgCount / kdfSpoofed 等**实证值只做打印、从不判定**，
+// 于是本测试永远退出 0 —— 而 XSS 与「弱哈希冒充强哈希」正是历史上出过事的两处。
+{
+  const fails = [];
+  const gate = (ok, msg)=>{ console.log((ok ? 'PASS  ' : 'FAIL  ') + '[安全] ' + msg); if(!ok) fails.push(msg); };
+  const x = out.xss || {};
+  gate(x.xssFired === 0, `恶意存档未触发脚本（xssFired=${x.xssFired}）`);
+  gate((x.injectedImgCount|0) === 0, `未注入图片等节点（count=${x.injectedImgCount}）`);
+  gate(x.injectedProofDiv !== true, '未注入可控 DOM 节点（xssProof）');
+  // KDF 标签必须与实际算法一致：非安全上下文下应如实标注弱算法，不得冒充 PBKDF2
+  gate(out.kdfSpoofed !== true, `KDF 标签未冒充强哈希（kdfSpoofed=${out.kdfSpoofed}）`);
+  gate(out.weakHashHonestlyLabeled !== false, `弱哈希被如实标注（weakHashHonestlyLabeled=${out.weakHashHonestlyLabeled}）`);
+  if(fails.length){ console.log(`\n安全测试 FAIL：${fails.length} 项未通过`); process.exit(1); }
+  console.log('\n安全测试 PASS');
+}

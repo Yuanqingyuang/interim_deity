@@ -155,6 +155,23 @@ try {
       from: first.tag, to: last.tag,
     };
     console.log('\n== 泄漏增量(基线→最后) ==', JSON.stringify(out.summary));
+
+    // ── 门禁（2026-10 新增）──
+    // 原先这些数值只被打印，从不判定，于是本测试永远退出 0 —— 泄漏回归没有任何拦截力。
+    const s = out.summary;
+    const gate = (ok, msg)=>{ console.log((ok ? 'PASS  ' : 'FAIL  ') + '[泄漏] ' + msg); if(!ok) out.gateFails = (out.gateFails||0)+1; };
+    if(s){
+      // GL 对象计数必须不增长：纹理由 _matCache 复用，缓冲区由 dispose 释放
+      gate(s.texLeak <= 0, `纹理无泄漏（texLeak=${s.texLeak} ≤ 0）`);
+      gate(s.progLeak <= 0, `着色器程序无泄漏（progLeak=${s.progLeak} ≤ 0）`);
+      // 缓冲区允许少量波动（InstancedMesh 按时代重建），但不得持续线性增长
+      gate(s.bufLeak <= 16, `缓冲区增量有界（bufLeak=${s.bufLeak} ≤ 16）`);
+      // 堆：读档后必须回落到基线附近（允许 8MB 波动，GC 时机不定）
+      gate(s.heapDeltaMB === null || s.heapDeltaMB <= 8, `堆增量有界（Δ=${s.heapDeltaMB}MB ≤ 8）`);
+    }
+    gate(!out.crashed, '流程无异常中断');
+    gate((out.notes||[]).filter(n => /console\.error/.test(n)).length === 0,
+      '页面无 console.error（含 404）');
   }
 } catch (e) {
   out.crashed = out.crashed || { at: 'outer', err: String(e).slice(0, 400) };
@@ -164,3 +181,8 @@ try {
 fs.writeFileSync(path.join(OUT, 'leak-results.json'), JSON.stringify(out, null, 2));
 console.log('\nnotes:'); out.notes.forEach(n => console.log(' -', n));
 await browser.close().catch(() => {});
+
+// ── 退出码 ──
+if(out.crashed){ console.log('\n泄漏测试 FAIL：流程异常'); process.exit(1); }
+if(out.gateFails){ console.log(`\n泄漏测试 FAIL：${out.gateFails} 项门禁未通过`); process.exit(1); }
+console.log('\n泄漏测试 PASS');
