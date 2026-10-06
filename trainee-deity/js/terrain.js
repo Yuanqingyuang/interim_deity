@@ -546,24 +546,44 @@ export function canPlaceZoneAt(G, x, y, zoneType){
   return true;
 }
 
-function residentialStats(G){
-  let sx=0, sy=0, n=0;
-  eachTile(G, (t,x,y)=>{
-    if(t.zone===1){ sx+=x; sy+=y; n++; }
+// ── 地块索引缓存（2026-10 性能）──
+// autoBuild 一轮内会连做 4 趟全图扫描（居住质心 + zone1/zone3/其他 的坐标表），
+// 而它们读的是同一份地块状态。这里合并为一次扫描，并按「地图变更版本号」缓存。
+// 版本号在 state.invalidateBuiltCache 内递增（地块变动已集中在其调用点），
+// 故命中时结果与重新扫描**逐位相同**，只是省掉了重复遍历。
+export function tileIndex(G){
+  const rev = G._scanRev | 0;
+  const c = G._tileIndex;
+  if(c && c.rev === rev) return c;
+  const res = [];                 // zone 1
+  const ind = [];                 // zone 3
+  const other = [];               // zone > 0 且 ≠ 3
+  const byZone = { 1: res, 2: [], 3: ind, 4: [] };
+  let sx = 0, sy = 0;
+  eachTile(G, (t, x, y)=>{
+    const z = t.zone | 0;
+    if(z <= 0) return;
+    const rec = { x, y };
+    if(byZone[z]) byZone[z].push(rec);
+    if(z === 1){ sx += x; sy += y; }
+    if(z !== 3) other.push(rec);
   });
-  if(!n) return { cx:0, cy:0, n:0 };
-  return { cx:sx/n, cy:sy/n, n };
+  const n = res.length;
+  const idx = {
+    rev, byZone, other, resN: n,
+    resCx: n ? Math.round(sx / n) : 0,
+    resCy: n ? Math.round(sy / n) : 0,
+  };
+  G._tileIndex = idx;
+  return idx;
+}
+export function residentialStats(G){
+  // 走 tileIndex 缓存，不再单独全图 eachTile
+  const ix = tileIndex(G);
+  if(!ix.resN) return { cx:0, cy:0, n:0 };
+  return { cx: ix.resCx, cy: ix.resCy, n: ix.resN };
 }
 
-function minDistToRes(G, x, y){
-  let best = Infinity;
-  eachTile(G, (t,xx,yy)=>{
-    if(t.zone!==1) return;
-    const d = Math.hypot(xx-x, yy-y);
-    if(d < best) best = d;
-  });
-  return best;
-}
 
 function countResNear(G, x, y, r=2){
   let n = 0;
@@ -683,12 +703,14 @@ function scoreIndustrialCell(G, x, y, resList, indList, otherList){
     + hash2(x,y,G.seed+7)*0.12;
 }
 
+/** 「已划区但非工业」的坐标表（与 collectZoneXY 共用同一次扫描） */
+function collectZoneXY_other(G){ return tileIndex(G).other.slice(); }
+
 function collectZoneXY(G, zone){
-  const list = [];
-  eachTile(G, (t,x,y)=>{
-    if(t.zone===zone) list.push({x,y});
-  });
-  return list;
+  // 走 tileIndex 缓存。返回 `slice()` —— **浅**拷贝：数组本身独立（push/splice 不影响
+  // 缓存），但元素对象是共享引用；生产代码只读 r.x/r.y，故安全。返回空数组的情形同原先。
+  const list = tileIndex(G).byZone[zone|0];
+  return list ? list.slice() : [];
 }
 
 export function placeIndustryBatch(G, maxTiles=2){
@@ -696,10 +718,8 @@ export function placeIndustryBatch(G, maxTiles=2){
   const resList = collectZoneXY(G, 1);
   if(!resList.length) return { n: 0, x: 0, y: 0 };
   const indList = collectZoneXY(G, 3);
-  const otherList = [];
-  eachTile(G, (t,x,y)=>{
-    if(t.zone>0 && t.zone!==3) otherList.push({x,y});
-  });
+  // 与 collectZoneXY 共用同一次扫描的结果（原本是第 4 趟全图 eachTile）
+  const otherList = collectZoneXY_other(G);
 
   // 居住质心 + 局部环带搜索，避免全图 O(n²)
   let sx=0, sy=0;

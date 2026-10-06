@@ -124,6 +124,9 @@ export function refreshBuiltCache(G){
 export function invalidateBuiltCache(G){
   if(G._builtCache) G._builtCache.valid = false;
   if(G._zoneCache) G._zoneCache.valid = false;
+  // 地块索引缓存版本号（terrain.tileIndex 用）：地块变动已集中在本函数的调用点，
+  // 故在此递增即可让 autoBuild 路径上的地块索引与其严格同步。
+  G._scanRev = (G._scanRev | 0) + 1;
   G._pendingValid = false;
 }
 
