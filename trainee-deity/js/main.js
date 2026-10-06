@@ -14,6 +14,9 @@ import { eraReadiness, eraReady as eraReadyOf, claimMilestones, milestoneSummary
 // 存档策略（是否该写、节流、互斥）抽到纯模块，使其可被 Node 单元测试覆盖 ——
 // 这三条路径原先写死在事件回调里，而 main.js 顶层会 boot()，Node 无法 import。
 import { isSaveBusy, autosaveTick, exitSaveTick, bgSaveTick } from './savepolicy.js';
+// 子民自动建造的优先级决策抽到纯模块：它承载两个真实玩法灾难（S-04 棘轮、住房死锁）
+// 的修复，原先写死在 autoBuild 内、零测试覆盖。
+import { autoBuildDecision } from './autobuild.js';
 import { Renderer } from './render.js';
 import { UI } from './ui.js';
 import * as Auth from './auth.js';
@@ -744,41 +747,17 @@ function autoBuild(){
   const zcA = G._zoneCache || {1:0,2:0,3:0,4:0};
   const cnt = {1: zcA[1]||0, 2: zcA[2]||0, 3: zcA[3]||0, 4: zcA[4]||0 };
 
-  // 公式目标（low = 刚需）；放置目标用**地块口径** buildingLowTiles = 逻辑数 ÷ buildQ(E)，
-  // 否则 E5 会试图铺 25,000 格住房（岛屿物理上限仅约 1,350 格建筑）→ 永久刷不满。
-  const need = {};
-  for(const z of [1,2,3,4]){
-    const lo = F.buildingLowTiles(E, z);
-    const hi = F.buildingHighTiles(E, z);
-    // S-04 修复：原 `cnt[z] + 2` 形成棘轮（need 恒 > cnt），farmShort/indShort/churchShort
-    // 恒真 → autoBuild 无条件刷到 hi 水位。达标（cnt ≥ lo）后 need = cnt，缺口判定归零。
-    need[z] = cnt[z] < lo ? lo : Math.min(hi, cnt[z]);
-  }
+  // 全部决策在 js/autobuild.js（纯逻辑、可单测）：目标 need[]、供需门槛、行动优先级。
+  // 该模块承载两个真实玩法灾难的修复 —— S-04 棘轮（need 恒 > cnt → 无脑刷满岛）
+  // 与住房死锁（房屋要求 8 邻域全空，若名额被农田/工业占掉则第一栋房永远建不出）。
+  const dec = autoBuildDecision(E, {
+    cnt, built: G._builtCache || {1:0,2:0,3:0,4:0}, pop: G.pop,
+    housingCap: housingCap(G), faithRate: G.faithRate,
+    housingPressure: AUTO.housingPressure, faithPressure: AUTO.faithPressure,
+  });
+  const need = dec.need;
+  const gates = dec.gates;
 
-  // R-review：供需与 tick 一致，按「已建成」计；产出用**逻辑口径**（地块 × buildQ(E)）
-  const bcA = G._builtCache || {1:0,2:0,3:0,4:0};
-  const qBA = F.buildQ(E);
-  const farmsBuilt = bcA[2]||0, indsBuilt = bcA[3]||0;
-  const foodOut = F.foodPerSec(farmsBuilt * qBA);
-  const foodNeed = F.foodNeed(G.pop);
-  const indOut = F.industryPerSec(indsBuilt * qBA);
-  // #25 性能：待建 = 划定 − 建成（与 tick 的 zSum−bSum 同口径），不再全图扫
-  // §3⑤ 需求与 tick 一致按 BUILD_COST 加权（否则 autoBuild 门控与实际建造速度脱节）
-  let pendingW = 0;
-  for(const z of [1,2,3,4]){
-    pendingW += Math.max(0, (cnt[z]||0) - (bcA[z]||0)) * (F.NUM.BUILD_COST[z] ?? 1);
-  }
-  const buildDemand = pendingW * F.NUM.C0 * Math.pow(1.5, E);
-
-  // 粮食有余：能养活当前人口，且再养 4 人（一栋房）仍够
-  const foodOk = foodOut >= foodNeed * 1.05 && foodOut >= (G.pop + 4) * F.NUM.R_FOOD;
-  // 产能有余：建造需求可控，且已有基本工业底子
-  const indBase = F.industryPerSec(Math.max(1, F.buildingLow(E, 3) * 0.2));
-  const indOk = indOut >= Math.max(indBase, buildDemand * 1.05);
-
-  const hc = housingCap(G);
-  const popPress = hc>0 && G.pop/hc > AUTO.housingPressure;
-  const houseShort = cnt[1] < need[1] || popPress || hc <= 0;
 
   let placed = 0;
   const thisTick = new Set();
@@ -820,34 +799,20 @@ function autoBuild(){
     return true;
   };
 
-  // 优先级：
-  // 1) 粮不够 → 田
-  // 2) 产能不够 → 工
-  // 3) 粮+产有余且住房缺口 → 房
-  // 4) 教堂缺口（按公式 low，不只看信仰压力）
-  // 缺口：公式目标用 zoned（还要继续建），实际供不应求用 built
-  const farmShort = cnt[2] < need[2] || foodOut < foodNeed;
-  const indShort = cnt[3] < need[3] || indOut < buildDemand;
-  const churchShort = cnt[4] < need[4] || (!G.faithRate || G.faithRate < AUTO.faithPressure);
-
-  // 房屋要求「8 邻域全空」（见 canPlaceZoneAt），农田/工业会先占掉这类空格；
-  // 人口已被住房卡满时若仍先放农田/工业，房屋就再也找不到点位 → 人口永久停滞。
-  // 更严重的是「一栋房都没有」时必须置顶且不看产能条件：
-  // E1–2 人口上限 = 住房×C_HOUSE，无住房 → popCap=0 → 人口从开局 20 迅速衰减到 1；
-  // 而 tryPlaceIndustry 在 pop<15 时直接放弃 → 无工业 → indOk 恒假 → 永远建不出第一栋房，
-  // 形成死锁（实测：人口卡在 1，农田却一路建到 40+ 格、粮产 45/s）。
-  const housingCritical = houseShort && (hc <= 0 || G.pop >= hc - 0.5);
-
-  if(housingCritical) tryPlace(1);
-  if(farmShort) tryPlace(2);
-  if(indShort) tryPlaceIndustry();
-  if(!housingCritical && foodOk && indOk && houseShort) tryPlace(1);
-  if(churchShort) tryPlace(4);
+  // 按纯函数给出的顺序尝试；tryPlace/tryPlaceIndustry 内部受 AUTO.maxPerTick 限制，
+  // 达到上限后自然提前返回，故顺序即优先级。
+  // 关键不变量（由 test/rev-6-autobuild.test.mjs 锁定）：
+  //   · 无住房 / 人口已达住房上限时，house 必须排在最前（否则第一栋房永远建不出）
+  //   · 非紧急住房只在粮产都有余时才建
+  //   · 工业的 pop<15 门槛在 tryPlaceIndustry 内部（运行时门槛，不属决策层）
+  const ACT = { house: 1, farm: 2, industry: 3, church: 4 };
+  for(const act of dec.list){
+    if(act === 'industry') tryPlaceIndustry();
+    else tryPlace(ACT[act]);
+  }
 
   // 若本轮啥也没建成且住房仍缺，再补一轮房（放宽资源门槛）
-  if(placed===0 && houseShort){
-    if(cnt[2] > 0 || foodOut > 0) tryPlace(1);
-  }
+  if(placed === 0 && dec.fallbackHouse) tryPlace(1);
 
   if(placed){
     invalidateBuiltCache(G);
