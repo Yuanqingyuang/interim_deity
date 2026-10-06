@@ -30,9 +30,10 @@ for(let E=0; E<5; E++){
 }
 // 逻辑口径必须仍是规范原式（T × r_b），不能被代理比污染
 for(let E=0; E<5; E++) for(const z of [1,2,3,4]){
-  if(buildingLow(E, z) !== Math.ceil(T[E] * NUM.R_B[z])) throw new Error('FAIL: 逻辑口径被改动');
+  assert(buildingLow(E, z) === Math.ceil(T[E] * NUM.R_B[z]),
+    '逻辑口径 buildingLow 仍为规范原式 ceil(T(E) × r_b)，未被 BUILD_Q 污染'
+      + '（E' + (E+1) + ' zone' + z + '：期望 ' + Math.ceil(T[E] * NUM.R_B[z]) + '，实测 ' + buildingLow(E, z) + '）');
 }
-assert(true, '逻辑口径 buildingLow 仍为规范原式 T(E) × r_b（未被 BUILD_Q 污染）');
 
 // ---- 3) E5 目标与核算 ----
 assert(T[4] === 60000, `E5 目标人口 ${T[4]}（6 万，为容纳进岛屿容量而自 10 万下调）`);

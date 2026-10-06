@@ -222,6 +222,14 @@ export class UI {
     cv.addEventListener('touchstart', down, { passive: false });
     cv.addEventListener('touchmove', move, { passive: false });
     window.addEventListener('touchend', up);
+    // 2026-10 审计：此前只注册 touchend。触摸被系统取消（来电、手势返回、多指误触）
+    // 不会触发 touchend，G.painting 会永久为 true → loop 每帧用冻结的 G.hover 继续
+    // applyTool（持续扣神力，并每 0.1s 触发一次全量 buildTerrain）。
+    window.addEventListener('touchcancel', up);
+    // 同理：拖拽到窗口外松手、或窗口失焦时，window 上的 mouseup 不会到达。
+    window.addEventListener('blur', up);
+    // 指针离开文档时也复位，覆盖「拖到浏览器边缘/外部应用」的情形
+    document.addEventListener('mouseleave', up);
     cv.addEventListener('contextmenu', e=>{ e.preventDefault(); e.stopPropagation(); });
     cv.addEventListener('auxclick', e=>e.preventDefault());
     // 中键自动滚动（Windows）

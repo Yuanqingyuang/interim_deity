@@ -1,6 +1,6 @@
 // 实习神明 · GameState（无边界稀疏区块）
 import { MINH, MAXH, DAY_LENGTH, CHUNK, START_CHUNKS, ERAS, faithCapOf } from './config.js';
-import { NUM, wonderPopMult } from './formulas.js';
+import { NUM, wonderPopMult, buildQ } from './formulas.js';
 import { logInit, logEncode, logDecode } from './log.js';
 
 export function makeTile(){
@@ -129,8 +129,13 @@ export function invalidateBuiltCache(G){
 
 export function housingCap(G){
   // 乘区统一走 formulas.wonderPopMult，禁止在此另写一份（2026-10 回归教训：
-  // 两份实现分叉 → UI 承诺 +20%/+50%、实际人口上限拿不到）
-  return countBuilt(G,1) * NUM.C_HOUSE * wonderPopMult(G.wonders);
+  // 两份实现分叉 → UI 承诺 +20%/+50%、实际人口上限拿不到）。
+  //
+  // countBuilt 返回**地块数**，而 C_HOUSE 是「每栋房容纳人数」，故必须乘 buildQ(E)
+  // 换算成逻辑栋数（2026-10 审计发现：此前漏乘 → E3 起本值比真实人口上限小一个量级，
+  // 使 autoBuild 的 housingCritical 恒真、每轮无条件 tryPlace(1) 无限建房，
+  // 并因房屋要求 8 邻域全空而挤占农田/工业用地）。
+  return countBuilt(G,1) * buildQ(G.era || 0) * NUM.C_HOUSE * wonderPopMult(G.wonders);
 }
 
 export function foodCap(G){

@@ -612,7 +612,10 @@ function tick(dt){
   }
   // §3⑥b 在建奇迹持续占用产能（施工总消耗 = coinCost(E) = 建造时长 × 刚需工业产能/秒）
   const wonderDraw = G.wonderList.some(w=>!w.done) ? F.wonderDrawPerSec(E) : 0;
-  let vBuild = F.buildSpeed(E, inds, pendingW, wonderDraw);
+  // indsL 是逻辑口径（地块数 × buildQ）：formulas.buildSpeed 的 industries 参数与
+  // pendingW / wonderDraw 都按逻辑数计。此前传地块数 inds，使 E5 的内部供给只有 HUD 的
+  // 1/20（HUD 9000/s vs 内部 450/s），且奇迹在建时供给恒被减到 0（2026-10 审计发现）。
+  let vBuild = F.buildSpeed(E, indsL, pendingW, wonderDraw);
   if(G.boostBuild>0) vBuild *= 3;
 
   // R11：仅推进 pending 列表，避免每帧全图 eachTile

@@ -71,6 +71,34 @@ assert(Math.abs(wonderPopMult(both) - 1.2*1.5) < 1e-9, '金字塔+摩天塔 → 
   assert(Math.abs(housingCap(G) - pTick) < 1e-9,
     `金字塔后 housingCap(${housingCap(G)}) === popCap(${pTick}) —— 同源，无分叉`);
 
+  // ---- 3b) 逐时代口径：housingCap 必须随 buildQ(E) 缩放 ----
+  // 2026-10 审计发现的偏差：housingCap 漏乘 buildQ(E)。因为 E1/E2 的 buildQ 恰为 1，
+  // 上面 era=0 的断言**锁不住**它；E3 起 hc 会比真实人口上限小一个量级，使 autoBuild 的
+  // housingCritical 恒真 → 每轮无条件 tryPlace(1) 无限建房。故这里对所有时代逐一断言。
+  const { buildQ } = await import('../js/formulas.js');
+  const { NUM } = await import('../js/formulas.js');
+  for(let era=0; era<5; era++){
+    G.era = era;
+    G.wonders = [false,false,false,false,false];
+    const q = buildQ(era);
+    const expect = houses * q * NUM.C_HOUSE;      // 地块数 × buildQ × 每栋容量
+    const got = housingCap(G);
+    assert(Math.abs(got - expect) < 1e-9,
+      `E${era+1}（buildQ=${q}）housingCap ${got} === 地块数 ${houses} × buildQ ${q} × C_HOUSE ${NUM.C_HOUSE} = ${expect}`);
+    // E1/E2 住房即主导项，故必须与 popCap 完全一致
+    if(era <= 1){
+      assert(Math.abs(got - popCap(era, houses*q, 0, 0, G.wonders)) < 1e-9,
+        `E${era+1} 住房主导：housingCap 与 popCap 同值`);
+    }
+    // 关键不变式：E3 起 housingCap 不得再小于「地块数 × C_HOUSE」——
+    // 那正是旧 bug 的形态（少了 buildQ），会让 pressure 判断恒真
+    if(era >= 2){
+      assert(got > houses * NUM.C_HOUSE,
+        `E${era+1} housingCap ${got} > 未换算值 ${houses*NUM.C_HOUSE}（旧 bug 形态不会再现）`);
+    }
+  }
+  G.era = 0;   // 还原，避免影响后续断言
+
   G.wonders = tower;
   const tTick = popCap(G.era, houses, 0, 0, G.wonders);
   assert(Math.abs(tTick - baseTick*1.5) < 1e-6, `摩天塔后 tick 用 cap ${tTick} = 基础×1.5`);

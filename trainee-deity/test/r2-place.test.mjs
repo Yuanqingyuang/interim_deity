@@ -48,7 +48,10 @@ assert(placedRes.length >= 3, `enough houses ${placedRes.length}`);
 // 工业：无居住则失败；有居住应返回 {n,x,y}
 const ind = placeIndustryBatch(G, 2);
 assert(ind && typeof ind === 'object', 'industry returns object');
-assert(ind.n === 0 || ind.n >= 1, `industry n=${ind.n}`);
+// 原断言 `ind.n === 0 || ind.n >= 1` 对整数恒真（零信息）。
+// 这里改为断言真实契约：批量放置的返回必须自洽 ——
+// n>0 时坐标合法且该地块确为工业区；n===0 时必须给出失败原因字段。
+assert(Number.isInteger(ind.n) && ind.n >= 0, `industry n 为非负整数（实测 ${ind.n}）`);
 if(ind.n > 0){
   assert(!(ind.x === 0 && ind.y === 0) || getTile(G,0,0)?.zone === 3, 'coords not blindly (0,0)');
   const ti = getTile(G, ind.x, ind.y);

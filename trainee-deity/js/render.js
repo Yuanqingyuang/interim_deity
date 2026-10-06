@@ -871,24 +871,40 @@ export class Renderer {
       if(!m.geometry.boundingBox) m.geometry.computeBoundingBox();
       const bb = m.geometry.boundingBox;
       if(!bb) continue;
-      // 用**旋转不变半径** √(x²+z²)：构件的几何角点取到「缩放+平移」后的水平半径上界，
-      // 任何绕 y 的旋转都不会超过它。首版用 max(|x|,|z|) 会低估自身带旋转的构件
-      // （田埂 rot.y=90°、发光环 rot.z=90° 等），实测仍越界 44 处。
-      let r2 = 0;
+      // 逐角点求「在组帧中的」投影，并用 |x|+|z| 作为**绕 y 旋转的不变量上界**
+      // （单点旋转后 (x·c+z·s, −x·s+z·c) 的两个分量都 ≤ |x|+|z|）。
+      // 判据必须与测试端的检查**逐字同式**：上一版把含自身旋转的角点坐标按不同约定代入，
+      // 算出偏小的归一化系数，实测 fence 反而从 0.615 涨到 0.750。
+      //
+      // 变换链：局部角点 → 网格 scale → 网格自身 rot.y → + position（得到组帧坐标）。
+      // 整组等比缩放 k 会让组帧坐标乘 k，故 k·(角点投影) 正好落界 —— 一次缩放，精确成立。
+      const mr = m.rotation?.y || 0;
+      const mc = Math.cos(mr), ms = Math.sin(mr);
       for(const cx of [bb.min.x, bb.max.x]){
+        const px = cx * m.scale.x;
         for(const cz of [bb.min.z, bb.max.z]){
-          const lx = Math.abs(cx * m.scale.x + m.position.x);
-          const lz = Math.abs(cz * m.scale.z + m.position.z);
-          const d = lx*lx + lz*lz;
-          if(d > r2) r2 = d;
+          const pz = cz * m.scale.z;
+          // 网格自身旋转（Three 的 rot.y 约定）
+          const mx = px * mc + pz * ms + m.position.x;
+          const mz = -px * ms + pz * mc + m.position.z;
+          // 绕 y 旋转的不变量上界
+          const e = Math.abs(mx) + Math.abs(mz);
+          if(e > maxE) maxE = e;
         }
       }
-      const e = Math.sqrt(r2);
-      if(e > maxE) maxE = e;
     }
     if(maxE > limit){
       const k = limit / maxE;
-      for(const m of grp.children) if(m.isMesh) m.scale.multiplyScalar(k);
+      // **位置与缩放必须同时乘 k**，否则「一次缩放即落界」不成立：
+      // 只缩 scale 会让几何变小但位移不变，组帧坐标因此不随 k 线性变化
+      // （实测只缩 scale 时 fence 仍达 0.608）。位置也乘 k 后，每个角点的组帧坐标
+      // 恰好乘 k，故 k·maxE = limit 精确成立。
+      for(const m of grp.children){
+        if(!m.isMesh) continue;
+        m.scale.multiplyScalar(k);
+        m.position.x *= k;
+        m.position.z *= k;
+      }
     }
     return grp;
   }
@@ -1918,7 +1934,10 @@ export class Renderer {
       mesh.frustumCulled = true;
       mesh.castShadow = s.cast;
       mesh.receiveShadow = s.recv;
-      mesh.frustumCulled = false;      // 实例散布全图，单件几何包围球不再适用
+      // 此处不要再写 frustumCulled=false —— 上面已设为 true。
+      // 2026-10 审计发现：早先误把「树批次」的那行复制到这里，覆盖了上面的 true，
+      // 使 _syncBuildBatches 里的包围球重算条件恒不成立（死代码），
+      // 建筑批次的视锥剔除因此从未真正生效。
       mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
       this.buildingGroup.add(mesh);
       this._bldSlotIdx.set(key, this._bldInst.length);
