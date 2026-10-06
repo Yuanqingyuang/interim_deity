@@ -78,6 +78,17 @@ export function heightAt(wx, wy, seed){
  * 河流掩码 0..1
  * 域扭曲 + 细谷噪声；>0.32 可开河
  */
+/**
+ * 水面平面的实际世界 y（= WATER_LEVEL − 0.04）。
+ *
+ * 水面网格为避开与岸边的 z-fighting，刻意画在 WATER_LEVEL 之下 0.04；
+ * 而水陆判据用的是 WATER_LEVEL 本身。两者相差的 0.04 会让
+ * h ∈ (WATER_PLANE_Y, WATER_LEVEL] 的格「判为水却露在水面之上」。
+ * 提为单一来源：判据仍用 WATER_LEVEL，定高时保证水格低于本值；
+ * render.js 的水面网格也引用同一常量，避免两处各写 0.04。
+ */
+export const WATER_PLANE_Y = WATER_LEVEL - 0.04;
+
 export function riverMask(wx, wy, seed){
   const p = warp2(wx, wy, seed, 8, 0.05);
   // 沿山向的细线谷：用两向 ridged 交叉
@@ -133,6 +144,10 @@ function fillTileFromNoise(t, x, y, seed){
 
   t.h = Math.min(Math.max(h, MINH), MAXH);
   t.water = t.h <= WATER_LEVEL ? 1 : 0;
+  // 水陆判据用 WATER_LEVEL，但水面网格画在 WATER_PLANE_Y（低 0.04）；
+  // 若不压平，h ∈ (WATER_PLANE_Y, WATER_LEVEL] 的水格会穿出水面（实测每区块 20–25 格）。
+  // 保证不变量：水格一律低于水面平面。判据值不变，故「能否建造」口径也不变。
+  if(t.water && t.h > WATER_PLANE_Y) t.h = WATER_PLANE_Y;
   t.tree = 0;
   t.zone = 0; t.prog = 0; t.built = false;
   t.variant = (hash2(x, y, seed + 13) * 3) | 0;

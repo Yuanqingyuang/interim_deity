@@ -10,7 +10,7 @@ import {
   formForEra, BLD_ROT, FACTORY_ROT,
   sampleSun, lerpHex, hash2, mulberry32, MAX_BUILD_MESH, MAX_TREE_MESH, MAX_NPC_INST
 } from './config.js';
-import { cornerColor, heightAt, riverMask, sampleHeight } from './terrain.js';
+import { cornerColor, heightAt, riverMask, sampleHeight, WATER_PLANE_Y } from './terrain.js';
 import { getTile, eachTile, chunkBounds, tileLive } from './state.js';
 import { buildQ } from './formulas.js';
 
@@ -867,7 +867,9 @@ export class Renderer {
       this.waterMesh.material.color.set(p.water);
     }
     // 水面略低于岸顶，减少与沙滩 z-fighting
-    this._waterBaseY = WATER_Y - 0.04;
+    // 引用 terrain.WATER_PLANE_Y 作为单一来源：terrain.fillTileFromNoise 用同一常量
+    // 把「判为水」的格压到本值之下，保证水格不穿出水面；两处若各写 0.04 会再次漂移。
+    this._waterBaseY = WATER_PLANE_Y;
     this.waterMesh.position.set(b.cx, this._waterBaseY, b.cy);
   }
 
