@@ -95,8 +95,16 @@ export function buildingHighTiles(E, zone){ return toTiles(buildingHigh(E, zone)
 
 /**
  * 奇迹「人口容量」乘区：金字塔 +20%、摩天塔 +50%（config.js WONDERS[1]/[3] 的 bonus 文案）。
- * 单一来源 —— state.housingCap（autoBuild 压力判断）与 tick 的人口上限都必须经此计算，
- * 否则会出现「UI 与 HUD 承诺加成、实际人口上限拿不到」的口径分叉（2026-10 修复的回归即属此类）。
+ *
+ * **乘区单一来源** —— 两个入口都必须经此计算，否则会出现「UI 与 HUD 承诺加成、
+ * 实际拿不到」的口径分叉（2026-10 修复的回归即属此类）：
+ *   1. `popCap()` —— 实际人口增长上限（N_cap，见 numeric-design §人口上限）
+ *   2. `state.housingCap()` —— autoBuild 的住房压力代理量
+ *
+ * ⚠️ 注意两者的**基数不同**且这是刻意的：N_cap 分阶段主导（E1–2 住房 → E3–4 粮食
+ * → E5 产能，见 numeric-design 表「人口上限」），而 housingCap 恒为「住房×C_HOUSE」。
+ * 因此 E3 起 housingCap 会大于或小于 N_cap，autoBuild 据此判断「住房是否仍是瓶颈」。
+ * 若日后想让 E3+ 也受住房约束，必须同步改 `popCap()` 的分支，否则会静默错 BUILD_Q 倍。
  */
 export function wonderPopMult(wonders){
   if(!wonders) return 1;

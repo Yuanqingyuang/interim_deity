@@ -589,7 +589,10 @@ function tick(dt){
   // 逻辑建筑数（产出与人口上限口径）：1 地块 = buildQ(E) 栋，见 numeric-design §9 BUILD_Q。
   // 产出、人口上限、奇迹「人口容量」乘区都必须用这一组；放置目标（need[]）用上面那组地块数。
   const qB = F.buildQ(E);
-  const farmsL = farms * qB, indsL = inds * qB, churchesL = churches * qB;
+  // housesL 一并换算：popCap 的 E≤2 分支消费 houses，E3+ 才改用 farms/industries
+  // （分阶段主导，见 numeric-design 表「人口上限」）。当前 E1/E2 的 buildQ 恰为 1，
+  // 故换算与否结果相同；但保持三项同口径可防止日后给 E3+ 加住房条款时静默错 BUILD_Q 倍。
+  const housesL = houses * qB, farmsL = farms * qB, indsL = inds * qB, churchesL = churches * qB;
 
   G.autoAcc += dt;
   if(G.autoAcc >= AUTO.interval){
@@ -687,7 +690,7 @@ function tick(dt){
   // 奇迹「人口容量+20%/+50%」必须作用于实际增长上限：不能只进 autoBuild 压力判断（housingCap），
   // 否则 WONDERS 的 bonus 文案与顶部/进阶条承诺都不兑现（2026-10 修复的回归）。
   // 逻辑口径：popCap 的三项输入都是「逻辑建筑数」，故传 ×buildQ(E) 后的值。
-  const cap = F.popCap(E, houses * qB, farmsL, indsL, G.wonders);
+  const cap = F.popCap(E, housesL, farmsL, indsL, G.wonders);
   let nextPop = F.growPop(G.pop, cap, E, farmsL, dt);
   if(G.boostGrow>0) nextPop = Math.min(cap, G.pop + (nextPop-G.pop)*2 + 0.6*dt);
   G.pop = Math.max(1, nextPop);
