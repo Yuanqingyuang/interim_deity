@@ -8,6 +8,9 @@ import { genWorld, applyTool, findAutoSite, placeDistrict, placeIndustryBatch, c
   canPlaceZoneManual, placeAt, ensureChunk } from './terrain.js';
 import * as F from './formulas.js';
 import * as Sfx from './audio.js';
+// 进度逻辑（eraReady / 里程碑 / 进阶状态迁移）抽到纯模块，使其可被 Node 单元测试覆盖。
+// main.js 顶层会 boot() 并注册 window 监听，Node 无法 import，故这些逻辑原先零覆盖。
+import { eraReadiness, eraReady as eraReadyOf, claimMilestones, milestoneSummary as milestoneSummaryOf, applyEraAdvance } from './progression.js';
 import { Renderer } from './render.js';
 import { UI } from './ui.js';
 import * as Auth from './auth.js';
@@ -704,40 +707,19 @@ function tick(dt){
   if(G.boostRain>0 && Math.random()<dt*14) R.spawnRain(0, 0);
 }
 
-/** 每时代 3 个里程碑；完成 +1 星（位图防重复） */
+/** 每时代 3 个里程碑；完成 +1 星（位图防重复）。
+ *  判定与记账在 js/progression.js（纯逻辑、可单测），此处只做表现层。 */
 function checkStarMilestones(E, farms, inds, churches, houses){
-  if(!G.starMilestones) G.starMilestones = [[],[],[],[],[]];
-  while(G.starMilestones.length < 5) G.starMilestones.push([false,false,false]);
-  const flags = G.starMilestones[E] || (G.starMilestones[E] = [false,false,false]);
-  const list = MILESTONES[E] || [];
-  // 里程碑阈值是逻辑口径（config.js 的 c.farms/c.inds 如「农田≥10」「工业≥200」），
-  // 而入参是地块数，故 × buildQ(E) 后再判定 —— 与 tick 产出口径一致。
-  const qm = F.buildQ(E);
-  const ctx = { farms: farms*qm, inds: inds*qm, churches: churches*qm, houses: houses*qm };
-  for(let i=0;i<list.length;i++){
-    if(flags[i]) continue;
-    if(list[i].check(G, ctx)){
-      flags[i] = true;
-      G.stars += 1;
-      toast(`里程碑达成：${list[i].label} ⭐`);
-      logPush(G, 40, 0, 0);
-    }
+  const newly = claimMilestones(G, { farms, inds, churches, houses });
+  for(const m of newly){
+    toast(`里程碑达成：${m.label} ⭐`);
+    logPush(G, 40, 0, 0);
   }
 }
 
-/** 当前时代里程碑文本（UI） */
+/** 当前时代里程碑文本（UI）—— 实现在 js/progression.js，与判定逻辑共用同一口径 */
 export function milestoneSummary(G, farms, inds, churches){
-  const E = F.eraIndex(G);
-  const list = MILESTONES[E] || [];
-  const flags = G.starMilestones?.[E] || [];
-  // 与 checkStarMilestones 同口径：入参为地块数，判定前 × buildQ(E)
-  const qm = F.buildQ(E);
-  const ctx = { farms: farms*qm, inds: inds*qm, churches: churches*qm, houses: 0 };
-  return list.map((m,i)=>{
-    const done = !!flags[i];
-    const ok = done || m.check(G, ctx);
-    return `${ok?'✓':'○'} ${m.label}`;
-  }).join(' · ');
+  return milestoneSummaryOf(G, farms, inds, churches);
 }
 
 const ZONE_COLORS = {
@@ -929,32 +911,27 @@ function placeWonder(x, y){
 }
 
 function eraReady(){
-  // R5：E1 无需奇迹；E2–E5 需本时代奇迹；E5 已是终点（通关看太空电梯）
-  // P3：另需产能/秒 ≥ GATE(E)
-  if(G.era >= 4) return false;
-  const needWonder = G.era >= 1;
-  const wonderOk = !needWonder || !!G.wonders[G.era];
-  if(G.pop < ERAS[G.era].popGoal) return false;
-  if(!wonderOk) return false;
-  if(G.stars < ERAS[G.era].starCost) return false;
+  // 判定在 js/progression.js（纯逻辑、可单测）；此处仅负责先把缓存刷新到最新。
+  // 四项条件：人口 / 本时代奇迹 / 星星 / 产能门槛（E1 无需奇迹，E5 已是终点）。
   ensureBuiltCache();
-  const indN = (G._builtCache && G._builtCache[3]) || 0;
-  // 门槛是逻辑口径（gateOf = 0.5 × 逻辑刚需工业产能），故地块数须 × buildQ(E) 后再比
-  return F.industryPerSec(indN * F.buildQ(G.era)) >= F.gateOf(G.era);
+  return eraReadyOf(G);
 }
 function advanceEra(){
-  if(!eraReady()){ toast('进阶条件未满足'); return; }
-  G.stars = Math.max(0, G.stars - ERAS[G.era].starCost);
-  G.era += 1;
-  G.starProg = 0;
-  G.terrainDirty = true;
+  const ready = eraReadiness(G);
+  if(!ready.ok){
+    // 把具体缺项告诉玩家，而非只说"条件未满足"（也便于排障）
+    toast('进阶条件未满足：' + ready.reasons.join('、'));
+    return;
+  }
+  // 状态迁移（扣星、era+1、清放置中/雕刻中残留）在 progression.js，表现层留在这里
+  const { name } = applyEraAdvance(G);
   R.applyEraVisuals(G);
   R.syncWorld(G);
   syncNpc();
   for(let i=0;i<5;i++){
     R.spawnBurst((Math.random()-0.5)*10, (Math.random()-0.5)*10, 0xffd54f, 30);
   }
-  toast(`迈入「${ERAS[G.era].name}」！`);
+  toast(`迈入「${name}」！`);
   logPush(G, 30, 0, 0);
   Sfx.sfxEra();
   // R5：不再强制 over；仅 E5 太空电梯通关

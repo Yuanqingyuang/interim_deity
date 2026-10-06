@@ -151,6 +151,13 @@ export class Renderer {
     // 路径会在 _syncShadow 里对 undefined 赋值而抛 TypeError（2026-10 审计发现）。
     this._shadowR = 30;
     this._focus = { x: 0, z: 0 };
+    // 地形网格几何参数（由 buildTerrain 写入）。undefined 表示尚未建过地形，
+    // 此时 _surfaceY 只能现场采样 —— 保持该语义，避免读到陈旧网格参数。
+    this._terrainOx = undefined; this._terrainOy = undefined;
+    this._terrainW = undefined; this._terrainH = undefined;
+    // 地形版本号：buildTerrain 每次重建递增，用于让拾取缓存失效
+    // （地形变了，射线命中点随之改变，旧格号不再可信）
+    this._terrainVer = 0;
     // P2-A 植被合批：区块内树不再逐棵建 Group，而是按部件合入 5 个 InstancedMesh 批次
     this._treeCand = [];       // 每帧收集的候选树格（复用数组，避免逐帧分配）
     this._treeInst = null;     // {trunk,cone,mid,ico,bush} 批次缓存（时代切换时重建）
@@ -535,6 +542,10 @@ export class Renderer {
     const GW = (b.maxX - b.minX + 1) + WILD*2;
     const GH = (b.maxY - b.minY + 1) + WILD*2;
     const W = GW+1, H = GH+1;
+    // 记下网格几何参数：_surfaceY 必须按同一套 ox/oy/W/H 复算格高度，
+    // 才能命中托管格与旷野高度缓存，从而与网格逐位一致。
+    this._terrainOx = ox; this._terrainOy = oy;
+    this._terrainW = W; this._terrainH = H;
     this._ensureWildHeights(seed, ox, oy, W, H);
     const wildH = this._wildHeights;
     // 缓冲复用：尺寸不变时不再每帧重建时新分配数百 KB 的 TypedArray（GC 压力主源）
@@ -649,6 +660,8 @@ export class Renderer {
     }
     g.computeVertexNormals();
     g.computeBoundingSphere();
+    // 地形变了，拾取缓存旧结果不再可信
+    this._terrainVer = (this._terrainVer || 0) + 1;
 
     // 旷野装饰：低频重建（时代切换 / 初始化 / **世界范围扩张**），避免刷地形时卡顿。
     // 2026-10 修复：原条件只看「首次」与「换时代」，于是地图扩张后新生成的外圈
@@ -676,16 +689,44 @@ export class Renderer {
   }
 
   /** 与地形网格一致的「格心」高度：自格+四邻平均，避免建筑埋进坡里 */
+  /**
+   * 格 (x,y) 的**可见表面高度**（建筑贴地基准）。
+   *
+   * 必须与 buildTerrain 生成的网格**逐位一致**，否则建筑浮空或埋地。
+   * 网格中心高度由四角均值决定（2026-10 修正；原为「自格 + 四正交邻」的 5 点十字均值）：
+   *   角 (gx,gy) 高度 = 格 (ox+gx-1, oy+gy-1) 起的 2×2 均值（同网格的 cornerH）
+   *   格 (x,y) 的 quad 由角 (x-ox, y-oy)…(x-ox+1, y-oy+1) 组成
+   *   → 中心 = 0.25 × 四角之和 = 1/16 × [1,2,1]⊗[1,2,1] 作用于 3×3 格邻域
+   * 旧核实测偏差：平均|Δ| 0.057–0.068、最大 0.853、39–42% 的格 |Δ|>0.05（建筑高仅 0.9–2.2）。
+   *
+   * 注意 heightOf 取 **t.h 原值、不做 MIN_H_SAFE 钳制** —— 与网格保持同式；
+   * 钳制只用于建筑自身的 y 下限，不参与表面高度。
+   */
   _surfaceY(G, x, y){
-    const hOf = (wx, wy)=>{
+    const seed = G.seed;
+    const ox = this._terrainOx, oy = this._terrainOy;
+    const W = this._terrainW, H = this._terrainH;
+    const wildH = this._wildHeights;
+    // 与 buildTerrain 内的 heightOf 同式：托管格取 t.h（水下也用真实高程，
+    // 河床有起伏、水面另铺一层），否则查旷野高度缓存，再否则现场采样。
+    const heightOf = (wx, wy)=>{
       const t = getTile(G, wx, wy);
-      if(t) return t.water ? WATER_Y : Math.max(MIN_H_SAFE, t.h);
-      return Math.max(MIN_H_SAFE, sampleHeight(wx, wy, G.seed));
+      if(t) return t.h;
+      if(ox !== undefined){
+        const gx = wx - ox + 1, gy = wy - oy + 1;
+        if(gx >= 0 && gx < W && gy >= 0 && gy < H){
+          const hv = wildH ? wildH[gy*W + gx] : undefined;
+          return Number.isFinite(hv) ? hv : 0;
+        }
+      }
+      return sampleHeight(wx, wy, seed);
     };
-    const h = (
-      hOf(x, y) + hOf(x+1, y) + hOf(x-1, y) + hOf(x, y+1) + hOf(x, y-1)
-    ) / 5;
-    return h;
+    const corner = (gx, gy)=>{
+      const wx = ox + gx - 1, wy = oy + gy - 1;
+      return (heightOf(wx, wy) + heightOf(wx+1, wy) + heightOf(wx, wy+1) + heightOf(wx+1, wy+1)) * 0.25;
+    };
+    const gx = x - ox, gy = y - oy;
+    return (corner(gx, gy) + corner(gx+1, gy) + corner(gx, gy+1) + corner(gx+1, gy+1)) * 0.25;
   }
 
   _buildWildDeco(G, ox, oy, GW, GH, seed, era){
@@ -2525,20 +2566,39 @@ export class Renderer {
     this._raycaster.setFromCamera(this._ndc, this.camera);
     const toTile = (v)=> Math.floor(v / TILE + 0.5);
 
-    // 按**射线**记忆化（2026-10 优化）：
-    // terrainMesh 是全图单网格，1089 区块时约 26.8 万三角形，而 handleMove 每次
-    // pointermove 都会调用本函数 → 未节流时拖动鼠标就是每像素一次全网格 raycast。
-    // 缓存键取射线原点+方向：同一格内移动时射线仍有极小变化，故再比对「解出的格号」——
-    // 格号相同即复用。相机移动会改变射线 → 自动失效，无需额外的失效逻辑。
-    // 用浮点等值比较是安全的：相机未动时 setFromCamera 对同一 NDC 产出位完全相同的射线。
+    // 拾取缓存（2026-10）。terrainMesh 是全图单网格（1024 区块时约 25 万三角形），
+    // 而每次鼠标移动都会调用本函数。两级缓存：
+    //   ① 整条射线按位相同 → 直接复用（同一像素被反复询问）
+    //   ② **平面闸门** —— 先用射线与地平面求交（常数开销）算出近似格号；
+    //        闸门格号与上次相同 且 相机/地形版本未变 → 复用上次结果，省掉全网格 raycast；
+    //        闸门格号不同 → 做一次真实 raycast。
+    // 注意：射线**原点恒为相机位置**，只有方向随像素变化，故单靠「整条射线相同」
+    // 在鼠标移动时永不命中 —— 这正是首版记忆化名不副实的原因（已由实测确认：
+    // 同格内 20 次移动仍触发 20 次 raycast）。
+    // 地形起伏会让闸门格号与真实格号偶尔不一致，代价只是多做一次 raycast，不影响正确性。
     const ro = this._raycaster.ray.origin, rd = this._raycaster.ray.direction;
+    const cam = this.camera;
+    const camKey = cam.position.x + ',' + cam.position.y + ',' + cam.position.z + ','
+                 + cam.rotation.x + ',' + cam.rotation.y + ',' + cam.rotation.z;
     const cache = this._pickCache;
     if(cache){
       const sameRay = cache.ox === ro.x && cache.oy === ro.y && cache.oz === ro.z
                    && cache.dx === rd.x && cache.dy === rd.y && cache.dz === rd.z;
       if(sameRay) return cache.cell ? cache.cell.slice() : null;
+      if(cache.camKey === camKey && cache.terrainVer === this._terrainVer){
+        if(this._raycaster.ray.intersectPlane(this._plane, this._hit)){
+          const gx = toTile(this._hit.x), gy = toTile(this._hit.z);
+          if(cache.gx === gx && cache.gy === gy) return cache.cell ? cache.cell.slice() : null;
+        }
+      }
     }
     const ox = ro.x, oy = ro.y, oz = ro.z, dx = rd.x, dy = rd.y, dz = rd.z;
+
+    // 平面闸门格号（可能与真实格号不同，仅用于缓存判定）
+    let gx = null, gy = null;
+    if(this._raycaster.ray.intersectPlane(this._plane, this._hit)){
+      gx = toTile(this._hit.x); gy = toTile(this._hit.z);
+    }
 
     let cell = null;
     if(this.terrainMesh && this.terrainMesh.geometry){
@@ -2548,10 +2608,8 @@ export class Renderer {
         cell = [toTile(p.x), toTile(p.z)];
       }
     }
-    if(!cell && this._raycaster.ray.intersectPlane(this._plane, this._hit)){
-      cell = [toTile(this._hit.x), toTile(this._hit.z)];
-    }
-    this._pickCache = { ox, oy, oz, dx, dy, dz, cell };
+    if(!cell && gx !== null) cell = [gx, gy];
+    this._pickCache = { ox, oy, oz, dx, dy, dz, cell, gx, gy, camKey, terrainVer: this._terrainVer };
     return cell ? cell.slice() : null;
   }
 
