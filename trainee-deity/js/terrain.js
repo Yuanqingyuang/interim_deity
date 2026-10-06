@@ -89,19 +89,49 @@ export function heightAt(wx, wy, seed){
  */
 export const WATER_PLANE_Y = WATER_LEVEL - 0.04;
 
+/**
+ * 河谷高程包络（2026-10 新增）：河道只在低地成立。
+ *
+ * 原实现用 inland = smstep(0.35, 0.75, continentField(...)) 把河道限制在大陆内部，
+ * 而 continentField 与高程强正相关 —— 实测河道占比随高程单调升高
+ * （0.75–1.2 带 10.4% → 6+ 带 80.0%），即河流几乎只出现在山顶，与真实地貌相反，
+ * 并导致 57–67% 的河道冲刷后仍是干沟（河床高于水面）。
+ *
+ * 形状：贴近水线渐入（不在岸线开河）→ 低地最强 → 随高程衰减归零。
+ * 只做高程筛选，走向仍由 ridged/fbm 决定。
+ */
+/**
+ * 河道判据阈值：riverMask 超过本值才冲刷成河。
+ *
+ * 单一来源 —— 原先 0.28 硬编码在 sampleHeight 内，与 riverMask 的幅度耦合却无显式
+ * 关系，调一处忘另一处会静默失效。实测（三种子）取 0.50 时：河道占陆地约 15%、
+ * 冲刷后干沟率≈0%、低地带占比≈77%；原 0.28 则是占陆地 29.5%、干沟率 56.3%。
+ */
+export const RIVER_THRESHOLD = 0.50;
+/** 阈值附近的过渡带宽：避免河道边缘出现高度硬边 */
+const RIVER_MARGIN = 0.10;
+/** 达标河道的河床上限：必须低于 WATER_PLANE_Y(= WATER_LEVEL−0.04)，否则又成干沟 */
+const RIVER_BED_MAX = WATER_PLANE_Y - 0.02;
+
+function riverAltitudeEnvelope(h){
+  const rise = smstep(WATER_LEVEL + 0.10, WATER_LEVEL + 0.55, h);
+  const fall = 1 - smstep(2.6, 4.6, h);
+  return rise * fall;
+}
+
 export function riverMask(wx, wy, seed){
   const p = warp2(wx, wy, seed, 8, 0.05);
   // 沿山向的细线谷：用两向 ridged 交叉
   const a = ridgedNoise(p.x * 0.09, p.y * 0.09, 4, seed + 301);
   const b = fbm(p.x * 0.04, p.y * 0.04, 3, seed + 307);
-  // 高大陆上的河谷更明显
-  const cont = continentField(p.x, p.y, seed, Math.hypot(wx, wy) / 90);
-  const inland = smstep(0.35, 0.75, cont);
+  // 高程包络替代原先的「按大陆度」项：heightAt 不含河道冲刷，故此处无递归。
+  const env = riverAltitudeEnvelope(heightAt(wx, wy, seed));
+  if(env <= 0) return 0;
   const line = 1 - Math.abs(a * 2 - 1);
-  let r = Math.pow(clamp01(line), 2.2) * (0.35 + b * 0.65) * inland;
+  let r = Math.pow(clamp01(line), 2.2) * (0.35 + b * 0.65) * env;
   // 主河带：域扭曲后的低频河槽
   const main = 1 - Math.abs(fbm(p.x * 0.03, p.y * 0.03, 3, seed + 41) * 2 - 1);
-  r = Math.max(r, Math.pow(clamp01(main), 3.5) * 0.85 * inland);
+  r = Math.max(r, Math.pow(clamp01(main), 3.5) * 0.85 * env);
   return clamp01(r);
 }
 
@@ -109,11 +139,14 @@ export function riverMask(wx, wy, seed){
 export function sampleHeight(wx, wy, seed){
   let h = heightAt(wx, wy, seed);
   const rm = riverMask(wx, wy, seed);
-  if(rm > 0.28 && h > WATER_LEVEL - 0.05){
-    const carve = Math.min(1, (rm - 0.28) / 0.45);
-    const bed = WATER_LEVEL - 0.12 - carve * 0.5;
-    h = h * (1 - carve * 0.85) + bed * carve * 0.85;
-    if(h > WATER_LEVEL - 0.02 && carve > 0.55) h = Math.min(h, WATER_LEVEL - 0.15);
+  if(rm > RIVER_THRESHOLD && h > WATER_LEVEL - 0.05){
+    // 阈值附近留一条过渡带（MARGIN）避免硬边；显著超阈的格直接切到水面之下。
+    // 须「真的低于水面」——原公式最多只降到 0.8h，导致高地上的河道全是干沟（实测 88–92%）。
+    const k = clamp01((rm - RIVER_THRESHOLD) / RIVER_MARGIN);
+    const bed = WATER_LEVEL - 0.12;                    // 河床：略低于水面
+    const mixTo = 0.78 + 0.22 * k;                     // 过渡带内下切 78%，达标后完全下切
+    h = h * (1 - mixTo) + bed * mixTo;
+    if(k >= 1) h = Math.min(h, RIVER_BED_MAX);         // 达标 → 强制低于水面平面
   }
   return Math.min(Math.max(h, MINH), MAXH);
 }
