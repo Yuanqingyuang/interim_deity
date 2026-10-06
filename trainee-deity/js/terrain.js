@@ -457,7 +457,10 @@ export function cornerColor(h, adjWater, hRight, hDown, era=0){
   if(h <= h1){
     c = mixRGB(bed, sand, smoothstep(h0, h1, h));
   } else if(h <= h2){
-    c = mixRGB(sand, grass, smoothstep(h1, h2, h) * 0.85);
+    // 不乘 0.85：原式在 h=h2 处只过渡到 85%，而下一分支从满 grass 起算，
+    // 两分支相差 15% 的 sand→grass 距离 → 实测 0.0853 的硬边（8bit ≈22/255），
+    // 且正落在可建高度带内。h1/h3/h4/h5 三处实测跳变 ≤0.0002，故只此处需要修。
+    c = mixRGB(sand, grass, smoothstep(h1, h2, h));
   } else if(h <= h3){
     c = mixRGB(grass, grass2, smoothstep(h2, h3, h));
   } else if(h <= h4){

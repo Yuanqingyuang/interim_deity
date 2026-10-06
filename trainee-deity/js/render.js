@@ -610,9 +610,14 @@ export class Renderer {
           c = cornerColor(h, false, hR, hD, era);
         } else {
           c = cornerColor(h, h <= WATER_Y, hR, hD, era);
-          const dcx = wx - b.cx, dcy = wy - b.cy;
-          const d = Math.sqrt(dcx*dcx+dcy*dcy) / Math.max(8, (b.maxX-b.minX)/2 + WILD*0.6);
-          const dim = 1 - Math.min(0.35, d*0.4);
+          // 暗角：离**托管区 bbox** 的外接距离（切比雪夫），边界处为 0、向外渐深。
+          // 原实现按「到 bbox 中心的距离 / bbox 半跨度」算，与托管/旷野的实际边界
+          // （按格是否存在判定）不重合 —— 托管最外格 dim=1.0、紧邻旷野格 dim≈0.73，
+          // 一格内亮度跳 27%。且它依赖 bbox 尺寸，每次世界扩张整圈旷野颜色都会变。
+          const outX = Math.max(b.minX - wx, wx - b.maxX);
+          const outY = Math.max(b.minY - wy, wy - b.maxY);
+          const outD = Math.max(0, outX, outY);          // 0 = 紧贴边界
+          const dim = 1 - Math.min(0.35, outD * 0.02);   // 约 17 格后到达最深
           c = { r:c.r*dim, g:c.g*dim, b:c.b*dim };
         }
         colors[i]=c.r; colors[i+1]=c.g; colors[i+2]=c.b;
