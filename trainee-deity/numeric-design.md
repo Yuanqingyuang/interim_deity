@@ -98,14 +98,26 @@ M(E) = T(E) / T(1)
 ```
 
 ### ② 人口（三重约束 + 分阶段主导）
+
+> ⚠️ **编号约定（易错点）**：下表用 **1-based 时代编号 E = 1…5**（人类可读）。
+> 而 `js/formulas.js:121 popCap()` 内部用 **0-based 的 era 下标**，其分段条件写作
+> `E <= 1 / E <= 3 / else` —— 两者**共用符号 E 但基数不同**，换算关系为
+> `下标 = 编号 − 1`。即 编号 1–2 ↔ 下标 0–1、编号 3–4 ↔ 下标 2–3、编号 5 ↔ 下标 4。
+> 阅读代码时务必先确认 E 是哪一套（本项目历史上多次因口径混淆产生缺陷）。
+
 ```
 N_high(E) = T(E)
 N_low(E)  = T(E-1)            // E=1 时为 20
 
-N_cap(E) =
-    E ≤ 2   :  房子数 × C_HOUSE                    // 住房主导
-    3 ≤ E ≤ 4 : ⌊ 农田数 × C_FARM / R_FOOD ⌋       // 粮食主导
-    E = 5   :   ⌊ 工业数 × K_IND / R_INDPOP ⌋      // 产能主导
+N_cap(E) =                              // E 为 1-based 时代编号
+    E = 1..2   :  房子数 × C_HOUSE                    // 住房主导
+    E = 3..4   : ⌊ 农田数 × C_FARM / R_FOOD ⌋         // 粮食主导
+    E = 5      : ⌊ 工业数 × K_IND / R_INDPOP ⌋        // 产能主导
+
+// 对应代码（js/formulas.js:121，E 为 0-based 下标）：
+//   if(E <= 1)      cap = houses * C_HOUSE
+//   else if(E <= 3) cap = floor(farms * C_FARM / R_FOOD)
+//   else            cap = floor(industries * K_IND / R_INDPOP)
 
 人口增长：
     N ← min( N_cap , N × (1 + g(E)·dt) + 0.6·dt )
