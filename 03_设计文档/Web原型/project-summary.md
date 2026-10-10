@@ -55,7 +55,7 @@ js/log.js      代号编码 → 中文展开
 
 ## 6. 数值
 
-见 [numeric-design.md](../numeric-design.md)。
+见 [numeric-design.md](../../01_WebDemo/numeric-design.md)（**权威来源在 Demo 目录内，随部署包发布；此处不维护副本**）。
 
 - 人口：E1–2 住房，E3–4 粮食，E5 产能
 - 产出按已划定格；住房容量按已建成格

@@ -4,7 +4,7 @@
 
 《实习神明》是**轻量沙盒 + 放置建造**的网页原型：塑造地形、规划区域、降下神迹，引导文明跨越五大时代（蛮荒 → 城邦 → 封建 → 工业 → 星际）。
 
-> 📌 全局速览见 **[docs/project-summary.md](docs/project-summary.md)**；数值公式见 **[numeric-design.md](numeric-design.md)**。
+> 📌 全局速览见 **[../03_设计文档/Web原型/project-summary.md](../03_设计文档/Web原型/project-summary.md)**；数值公式见 **[numeric-design.md](numeric-design.md)**。
 
 ---
 
@@ -82,8 +82,6 @@ http://localhost:8080/?seed=123&debug=1
 │   ├── ui.js  auth.js  saves.js  log.js
 │   └── audio.js
 ├── vendor/three@0.161.0/      ← 发布：Three.js 本地化（离线可玩，无 CDN）
-├── docs/                      ← 开发文档（不进部署包）
-│   ├── project-summary.md  project-plan.md  deploy.md
 ├── test/                      ← 测试（不进部署包）
 │   ├── *.test.mjs                自动化测试（npm test 自动发现）
 │   ├── browser/                  需真实浏览器的回归（Node 侧无法运行）
@@ -142,16 +140,21 @@ npm run test:browser
 
 ## ☁️ 部署
 
-见 [docs/deploy.md](docs/deploy.md)。要点：纯静态站、根目录直接是 `index.html`、HTTPS；Three.js 已本地 vendor。因源码直出、无构建哈希，`.js` / `.css` 建议设 `Cache-Control: no-cache`，否则改版后老用户会继续跑旧代码。
+见 [../03_设计文档/Web原型/deploy.md](../03_设计文档/Web原型/deploy.md)。要点：纯静态站、根目录直接是 `index.html`、HTTPS；Three.js 已本地 vendor。因源码直出、无构建哈希，`.js` / `.css` 建议设 `Cache-Control: no-cache`，否则改版后老用户会继续跑旧代码。
 
 ---
 
 ## 📄 文档
 
-| 文件 | 内容 |
-|------|------|
-| [numeric-design.md](numeric-design.md) | 数值公式与参数 |
-| [docs/project-summary.md](docs/project-summary.md) | 实现总览与待办 |
-| [docs/deploy.md](docs/deploy.md) | 宝塔 / 静态托管部署 |
+> 原 `docs/` 目录已随 2026-10 仓库重组移至 [`03_设计文档/Web原型/`](../03_设计文档/Web原型/)。
+> 完整的技术文档集（19 份）见 [技术文档总索引](../03_设计文档/Web原型/project-docs/README.md)。
+
+| 文件 | 位置 | 内容 |
+|------|------|------|
+| [numeric-design.md](numeric-design.md) | **本目录** | 数值公式与参数（**权威来源**，随部署包发布） |
+| [project-summary.md](../03_设计文档/Web原型/project-summary.md) | `03_设计文档/Web原型/` | 实现总览与待办 |
+| [project-plan.md](../03_设计文档/Web原型/project-plan.md) | `03_设计文档/Web原型/` | 项目规划与压测记录（P1/P2/P3） |
+| [deploy.md](../03_设计文档/Web原型/deploy.md) | `03_设计文档/Web原型/` | 宝塔 / 静态托管部署 |
+| [project-docs/](../03_设计文档/Web原型/project-docs/README.md) | `03_设计文档/Web原型/` | **技术文档集**（19 份 / 55 个编号公式） |
 
 *Web 原型 · Three.js + ES Modules*
