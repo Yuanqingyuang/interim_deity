@@ -30,7 +30,7 @@
 **必须用 HTTP 打开**（不能双击 `index.html`）。
 
 ```bash
-cd trainee-deity
+cd 01_WebDemo          # 仓库重组后的路径
 python3 -m http.server 8080
 # 或 npx serve .
 ```
@@ -63,10 +63,15 @@ http://localhost:8080/?seed=123&debug=1
 
 ## 📂 项目结构
 
+> **仓库重组说明（2026-10）**：本 Demo 原先位于仓库根的 `trainee-deity/`，
+> 现整体移动为 `01_WebDemo/`（内部结构与相对路径**完全未变**）。
+> 原 `docs/` 下的开发文档已移至仓库的 `03_设计文档/Web原型/`（按「原型 / 剧情 / 设计」分离原则）。
+> 存档键名与打包产物名仍为 `trainee-deity-*`，**未改动**（改动会导致老玩家存档失效）。
+
 **发布内容与测试内容严格分离**——部署包只含下面标「发布」的部分。
 
 ```
-trainee-deity/
+01_WebDemo/                      ← 仓库重组后的路径（原 trainee-deity/）
 ├── index.html                 ← 发布
 ├── styles.css                 ← 发布
 ├── numeric-design.md          ← 发布（数值规范，随包附带）

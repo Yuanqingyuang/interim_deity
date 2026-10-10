@@ -186,7 +186,7 @@
 
 | 缺陷 | 症状 |
 |---|---|
-| CI 浏览器回归**长期静默跳过** | 静态服务从**仓库根**起（`index.html` 在 `trainee-deity/`）→ `/index.html` 404；而 `curl -sf … && echo` 探测失败**不影响 job 结论** |
+| CI 浏览器回归**长期静默跳过** | **两层原因**：① 工作流原先在 `trainee-deity/.github/`，而 GitHub 只读仓库根的 `.github/` → **CI 从未被加载**（2026-10 重组时提到根目录修复）；② 静态服务从仓库根起（`index.html` 在子目录）→ `/index.html` 404，而 `curl -sf … && echo` 探测失败**不影响 job 结论** |
 | 打印型测试 | 只 `console.log` 无断言，永远"通过" |
 | 4 个浏览器测试无门禁 | 缺 `process.exit`，失败也返回 0 |
 | `npm run test:browser` 与 CI 漏跑 2 个测试 | `stress-test`、`platform-test` 未纳入 |

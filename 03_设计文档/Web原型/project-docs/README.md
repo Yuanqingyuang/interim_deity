@@ -210,11 +210,11 @@
 
 | 资料 | 位置 | 用途 |
 |---|---|---|
-| 源码 14 模块 | `trainee-deity/js/` | 事实来源（最终以代码为准） |
-| 数值规格 | `trainee-deity/numeric-design.md`（647 行） | 数值权威来源（**本次已修正 2 处偏差**） |
-| 项目规划书 | `trainee-deity/docs/project-plan.md` | 压测记录 P1/P2/P3 |
-| 现状总览 | `trainee-deity/docs/project-summary.md` | 架构速览 |
-| README / 部署说明 | `trainee-deity/README.md`、`docs/deploy.md` | 工程约定 |
+| 源码 14 模块 | `01_WebDemo/js/`      （仓库重组后路径） | 事实来源（最终以代码为准） |
+| 数值规格 | `01_WebDemo/numeric-design.md`（647 行） | 数值权威来源（**本次已修正 2 处偏差**） |
+| 项目规划书 | `03_设计文档/Web原型/project-plan.md` | 压测记录 P1/P2/P3 |
+| 现状总览 | `03_设计文档/Web原型/project-summary.md` | 架构速览 |
+| README / 部署说明 | `01_WebDemo/README.md`、`03_设计文档/Web原型/deploy.md` | 工程约定 |
 | 修改计划书 v2 | `E:\sxsm\修改计划书-v2.md` | 问题诊断 |
 | 修改计划书 v1 | `E:\sxsm\修改计划书.md` | **仅采用 v2 未覆盖部分**（问题分级 P0–P7、环境故障记录） |
 | 后续工作计划 | `E:\sxsm\后续工作计划.md` | 优先级依据 |

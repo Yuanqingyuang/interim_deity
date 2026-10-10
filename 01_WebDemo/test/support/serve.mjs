@@ -1,13 +1,13 @@
 // 静态服务器（开发 / 测试共用；等价于 `python -m http.server`，但不依赖 Python）
 //
-// 为什么需要它：`index.html`、`styles.css`、`js/`、`vendor/` 都在 `trainee-deity/` 子目录里，
+// 为什么需要它：`index.html`、`styles.css`、`js/`、`vendor/` 都在本目录（仓库重组后为 `01_WebDemo/`）里，
 // 而仓库根还有 `docs/`、`test/`、`README`。若从**仓库根**起服务，`/index.html` 会 404 ——
 // CI 的浏览器 job 曾因此长期静默跳过（`python3 -m http.server 8080 &` 从仓库根起，
 // 随后的 `curl -sf .../index.html && echo "server up"` 失败但不影响 job 结论）。
 //
 // 用法：node test/support/serve.mjs [port] [root]
 //   port  默认 8080（可用 PORT 环境变量覆盖）
-//   root  默认为本脚本上两级的 trainee-deity/（即游戏根目录）
+//   root  默认为本脚本上两级（即游戏根目录，仓库重组后为 01_WebDemo/）
 
 import http from 'node:http';
 import fs from 'node:fs';

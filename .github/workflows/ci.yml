@@ -1,10 +1,22 @@
 name: CI
 
+# 本工作流位于**仓库根**的 .github/workflows/ —— 这是 GitHub Actions 唯一会读取的位置。
+#
+# 历史教训：本文件原先在 trainee-deity/.github/workflows/ci.yml，
+# 而 GitHub 不读取子目录里的 workflows → 这个 CI **从未运行过**。
+# 当时以为"浏览器回归静默跳过"是探测语句的问题，实际是更上一层：工作流根本没被加载。
+#
+# 仓库重组后 Web Demo 位于 01_WebDemo/，故所有 step 必须显式指定 working-directory。
+
 on:
   push:
     branches: [main, master]
   pull_request:
   workflow_dispatch:
+
+defaults:
+  run:
+    working-directory: 01_WebDemo
 
 jobs:
   # ── 核心门禁：零依赖，必过 ──
@@ -38,10 +50,10 @@ jobs:
         run: npm --prefix test/browser install
       - name: 下载 Chromium（与 playwright-core 1.63.0 同版本注册表）
         run: npx --yes playwright@1.63.0 install --with-deps chromium
-      # 静态服务必须从**游戏根目录**起（index.html 在 trainee-deity/），
-      # 从仓库根起会让 /index.html 返回 404；旧版用 `curl -sf ... && echo` 探测，
-      # 探测失败不影响 job 结论，于是浏览器回归长期静默跳过。
-      # test/support/serve.mjs 自带「根下必须有 index.html」的前置校验，缺了会直接失败。
+      # 静态服务必须从**游戏根目录**起（index.html 在 01_WebDemo/），
+      # 从仓库根起会让 /index.html 返回 404。
+      # test/support/serve.mjs 自带「根下必须有 index.html」的前置校验，缺了会直接失败；
+      # 且此处的探测循环以 exit 1 结束，不会出现"探测失败却不影响 job 结论"的假通过。
       - name: 启动静态服务（游戏根目录 :8080）
         run: |
           node test/support/serve.mjs 8080 &

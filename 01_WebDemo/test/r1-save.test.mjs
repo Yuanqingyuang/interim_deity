@@ -1,5 +1,5 @@
 // R1 自测：serialize 压缩 + writeSave 计时 + 连续 10 次存读
-// 运行：node trainee-deity/test/r1-save.test.mjs
+// 运行：node 01_WebDemo/test/r1-save.test.mjs   （仓库重组后的路径）
 const performance = { now: () => Date.now() };
 
 // --- localStorage mock ---
