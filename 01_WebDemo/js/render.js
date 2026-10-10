@@ -947,11 +947,23 @@ export class Renderer {
       // 只缩 scale 会让几何变小但位移不变，组帧坐标因此不随 k 线性变化
       // （实测只缩 scale 时 fence 仍达 0.608）。位置也乘 k 后，每个角点的组帧坐标
       // 恰好乘 k，故 k·maxE = limit 精确成立。
+      //
+      // ⚠️ 2026-10 修复：原实现只乘了 position.x / position.z，**漏了 position.y**。
+      // 上面那段注释说的是「位置也乘 k」（三维），但代码少了一维 —— 于是几何按 k 收缩、
+      // 而垂直间距保持原值，堆叠部件之间的缝隙被放大 1/k 倍（屋顶升空）。
+      // 实测（_fitToPlot 前后逐件对比，组在 y=0）：
+      //   E1 草棚    k=0.453  bodyCyl 顶 0.588 → coneRoof 底 0.905  缝隙 0.317（占全高 25%）
+      //   E3 哥特教堂 k=0.431  nave 顶 0.851  → churchRoof 底 1.359 缝隙 0.508
+      //   E5 反应堆  k=0.302  主体顶 0.469    → 穹顶/底座完全分离
+      // 整体高度被放大 2.0–2.9 倍。补上 y 后，包围盒高度恰等于「代码意图 × k」
+      // （E1: 1.291×0.4527≈0.584 实测 0.629 ✓），即回到各 builder 的设计比例。
+      // 注意 x/z 的落界判据不含 y，故补 y 不影响 k·maxE=limit 的成立。
       for(const m of grp.children){
         if(!m.isMesh) continue;
         m.scale.multiplyScalar(k);
         m.position.x *= k;
         m.position.z *= k;
+        m.position.y *= k;
       }
     }
     return grp;
