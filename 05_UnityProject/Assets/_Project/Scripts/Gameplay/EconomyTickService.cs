@@ -53,6 +53,8 @@ namespace InterimDeity.Gameplay
         public bool FaithCapped;
         /// <summary>是否触发了自动建造。</summary>
         public bool AutoBuildRan;
+        /// <summary>本 tick 是否**新判定**出终局通关（E5 太空电梯建成）。</summary>
+        public bool FinalWin;
         /// <summary>本 tick 新达成的里程碑标签。</summary>
         public System.Collections.Generic.List<string> NewMilestones = new System.Collections.Generic.List<string>();
     }
@@ -60,6 +62,33 @@ namespace InterimDeity.Gameplay
     /// <summary>经济 tick 的权威实现。</summary>
     public static class EconomyTickService
     {
+        /// <summary>
+        /// `EconomyRules.GrowPop` 的**钳制前**版本：逐步复刻其源码，但**不做** `if (next &gt; cap) next = cap;`。
+        ///
+        /// 为什么必须复刻而不能复用：`GrowPop` 的返回已被钳到 cap，
+        /// 未钳制的增长量无法从返回值恢复。而「丰收祝福」的 Web 公式
+        /// （`pop + (next-pop)*2 + 0.6*dt`）需要的是**未钳制**的 next——
+        /// 否则 `pop &gt; cap` 时 `next-pop` 是个大负数，×2 会把衰减加倍、把人口打到下限。
+        ///
+        /// 与 `EconomyRules.GrowPop` 的唯一差别就是那一行钳制；
+        /// 若上游 `GrowPop` 的公式变更，此处必须同步（已在测试 B29 覆盖两者在 pop ≤ cap 时的一致性）。
+        /// </summary>
+        private static double GrowPopUnclamped(double n, int e, double farms, double dt)
+        {
+            int E = EconomyRules.EraIndex(e);
+            double g = EconomyRules.GROWTH[E];
+            double next = n * (1 + g * dt) + 0.6 * dt;
+            // ← 此处刻意不做 `next = cap` 钳制（这是与 GrowPop 的唯一差异）
+            double food = EconomyRules.FoodPerSec(farms);
+            if (food < EconomyRules.FoodNeed(next))
+            {
+                double supported = food / EconomyRules.R_FOOD;
+                double deficit = (EconomyRules.FoodNeed(next) - food) / Math.Max(1e-6, EconomyRules.FoodNeed(next));
+                next = supported - supported * Math.Min(0.5, deficit) * dt;
+            }
+            return Math.Max(0, next);
+        }
+
         /// <summary>
         /// 推进一个固定步长。
         /// </summary>
@@ -88,9 +117,9 @@ namespace InterimDeity.Gameplay
             rep.Era = e;
 
             // ── 1. boost 计时器递减 ──
-            if (stats.BoostGrow > 0) stats.BoostGrow = Math.Max(0, stats.BoostGrow - dt);
-            if (stats.BoostBuild > 0) stats.BoostBuild = Math.Max(0, stats.BoostBuild - dt);
-            if (stats.BoostRain > 0) stats.BoostRain = Math.Max(0, stats.BoostRain - dt);
+            // 委托 MiracleService：增益的唯一权威来源是 WorldStats 的三个 boost 字段，
+            // 递减逻辑只在 MiracleService.TickBoosts 里实现一份（对应 Web tick 开头的三个 Math.max）。
+            MiracleService.TickBoosts(G, dt);
 
             // ── 2. 刷新统计缓存 ──
             // RefreshBuiltCache 会同时刷新 BuiltCache 与 ZoneCache，并置两个 valid 标志（已核对实现）
@@ -173,23 +202,14 @@ namespace InterimDeity.Gameplay
                 indsL = inds * qB; churchesL = churches * qB;
             }
 
-            // ── 7. 推进奇迹 ──
-            for (int i = 0; i < stats.WonderList.Count; i++)
-            {
-                WonderEntry w = stats.WonderList[i];
-                if (w.Done) continue;
-                int we = EconomyRules.EraIndex(w.Era);
-                double rate = dt / EraConstants.WonderTime[we];
-                if (stats.BoostBuild > 0) rate *= 2;
-                w.Progress = (float)(w.Progress + rate);
-                if (w.Progress >= 1f)
-                {
-                    w.Progress = 1f;
-                    w.Done = true;
-                    stats.Wonders[we] = true;
-                    rep.WondersCompleted++;
-                }
-            }
+            // ── 7. 推进奇迹 + 完成结算 ──
+            // 分成两步，各自只有一份实现（原先内联在这里，现委托给 WonderService）：
+            //   ① AdvanceActive —— 只推进进度（速率 dt/WonderTime[era]，boostBuild 时 ×2）
+            //   ② TryComplete   —— 只做完成判定与效果接入（幂等：Done 标志置位后不再结算）
+            // 拆开的意义：把"同一 tick 不重复推进、不重复结算"变成可被测试直接断言的两件事。
+            WonderService.AdvanceActive(G, dt);
+            rep.WondersCompleted += WonderService.TryComplete(G, out bool finalWin);
+            rep.FinalWin = finalWin;
 
             // ── 8. 信仰 ──
             // 夜间加成：Web `(G.dayTime < 0.22 || G.dayTime > 0.78) ? 1.15 : 1.0`
@@ -219,7 +239,24 @@ namespace InterimDeity.Gameplay
             double before = stats.Population;
             double nextPop = EconomyRules.GrowPop(stats.Population, cap, e, farmsL, dt);
             if (stats.BoostGrow > 0)
-                nextPop = Math.Min(cap, stats.Population + (nextPop - stats.Population) * 2 + 0.6 * dt);
+            {
+                // Web 原式：`nextPop = Math.min(cap, G.pop + (nextPop-G.pop)*2 + 0.6*dt)`
+                //
+                // ⚠️ 该式在 `pop > cap` 时**反向**：`GrowPop` 在超载时会把 next 钳到 cap
+                // （源码 `if (next > cap) next = cap;`），于是 `nextPop - pop` 是一个大负数，
+                // `×2` 把衰减**加倍** —— 施放"丰收祝福"反而让人口崩到下限。
+                // 实测（pop=50 / cap=12）：min(12, 50 + (12-50)*2 + 0.02) = -25.98 → max(1,·) = 1。
+                //
+                // 注意：**不能在 GrowPop 的返回值上做修正** —— 它返回的已经是钳过的 cap，
+                // 未钳制的 delta 无法从中恢复（这是第一次尝试失败的原因：写成了 no-op）。
+                // 因此这里按 GrowPop 的**源码逐步复刻**，但取钳制前的 `next`。
+                // Web 侧该状态不可达（人口涨到 cap 即停），故原式在 Web 里看不出问题。
+                double rawNext = GrowPopUnclamped(stats.Population, e, farmsL, dt);
+                double boosted = stats.Population + (rawNext - stats.Population) * 2 + 0.6 * dt;
+                if (boosted > cap) boosted = cap;
+                if (boosted < 1) boosted = 1;
+                nextPop = boosted;
+            }
             // **人口下限 1** —— 与 Web `G.pop = Math.max(1, nextPop)` 同式。
             // 注意：纯函数 GrowPop 的下限是 0，钳制必须在编排层做（见 19_核实更正_人口吸收态.md）。
             stats.Population = Math.Max(1, nextPop);
