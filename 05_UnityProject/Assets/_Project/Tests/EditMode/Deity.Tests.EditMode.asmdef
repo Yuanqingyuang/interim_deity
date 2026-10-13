@@ -1,0 +1,28 @@
+{
+    "name": "Deity.Tests.EditMode",
+    "rootNamespace": "InterimDeity.Tests.EditMode",
+    "references": [
+        "Deity.Core",
+        "Deity.Simulation",
+        "Deity.World",
+        "Deity.Gameplay",
+        "Deity.Save",
+        "UnityEngine.TestRunner",
+        "UnityEditor.TestRunner"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": true,
+    "precompiledReferences": [
+        "nunit.framework.dll"
+    ],
+    "autoReferenced": false,
+    "defineConstraints": [
+        "UNITY_INCLUDE_TESTS"
+    ],
+    "versionDefines": [],
+    "noEngineReferences": false
+}

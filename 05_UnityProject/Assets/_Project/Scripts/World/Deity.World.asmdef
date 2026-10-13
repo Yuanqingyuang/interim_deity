@@ -1,0 +1,17 @@
+{
+    "name": "Deity.World",
+    "rootNamespace": "InterimDeity.World",
+    "references": [
+        "Deity.Core",
+        "Deity.Simulation"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": true
+}

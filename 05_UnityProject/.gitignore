@@ -1,0 +1,36 @@
+# Unity 工程忽略规则（仅作用于 05_UnityProject/）
+# ---- 由 Unity 生成的本地缓存/产物，禁止入库 ----
+[Ll]ibrary/
+[Tt]emp/
+[Oo]bj/
+[Bb]uild/
+[Bb]uilds/
+[Ll]ogs/
+[Uu]ser[Ss]ettings/
+[Mm]emoryCaptures/
+[Rr]ecordings/
+
+# ---- 自动生成的 IDE 工程文件（由 .csproj/.sln 生成器产出）----
+*.csproj
+*.unityproj
+*.sln
+*.suo
+*.user
+*.userprefs
+*.pidb
+*.booproj
+*.svd
+*.pdb
+*.mdb
+*.opendb
+*.VC.db
+
+# ---- 构建产物 ----
+*.apk
+*.aab
+*.unitypackage
+*.app
+
+# ---- 崩溃/诊断日志 ----
+sysinfo.txt
+crashlytics-build.properties
